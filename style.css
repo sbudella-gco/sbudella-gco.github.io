@@ -1,0 +1,50 @@
+body {
+	margin:40px auto;
+	max-width:650px;
+	line-height:1.6;
+	font-size:18px;
+	color:#444;
+	padding:0 10px;
+    text-align: justify;
+}
+
+h1, h2, h3 { 
+	line-height: 1.2;
+}
+
+a:hover, a:visited, a:link, a:active {
+	color: blue;
+    text-decoration: none;
+}
+
+.adate {
+	font-size: 45%;
+    line-height: 2.5;
+}
+
+.centered {
+	text-align: center;
+}
+
+nav {
+	word-spacing: 1em;
+}
+
+nav, header {
+	text-align: right;
+}
+
+img.resize {
+	max-width:85%;
+	max-height:85%;
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 1em;
+}
+
+pre {
+	overflow:auto;
+    word-wrap: normal;
+    padding:1em;
+}

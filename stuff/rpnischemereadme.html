@@ -1,0 +1,121 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>RPNI library for Scheme</title>
+		<link rel="stylesheet" type="text/css" href="style.css">
+	</head>
+
+	<body>
+
+<h1>RPNI-scheme</h1>
+
+<h2>Regular Positive Negative Inference Library for Scheme</h2>
+<p>Giuseppe Cocomazzi | sbudella at gmail dot com
+</p>
+<hr />
+
+<h3>Download</h3>
+<p>
+  <a href="stuff/rpni-scheme.tgz">[src]</a> <br>
+</p>
+
+<h3>Usage</h3>
+<p>The only dependency needed is the <a href="http://www.call-cc.org">Chicken Scheme
+implementation</a>, available in pre-compiled packages for
+   most platforms.  The library comes with a tiny Makefile that generates the
+   shared libs and the import files, so running a simple <em>make</em> is enough to use
+   the library interactively from within the Chicken interpreter.  Front-end
+   facilities are provided in the form of the following &quot;driver&quot; scripts:
+</p>
+<ul>
+ <li><p><em>draw.scm</em>: expect from stdin a list of pairs <code>((s a m p l e) . 0|1)</code> that
+     is, the first element is a proper list of symbols representing a string the
+     inferred automaton shall accept or reject according to whether the second
+     element of the pair is 1 or 0, respectively. Examples of input samples are
+     provided in the <em>samples</em> directory. The script writes to stdout a complete
+     graph representation of the automaton inferred from the list of samples,
+     described in the Graphviz DOT language. Furthermore, a dump of the automaton in
+     a form suitable for the Scheme <em>read</em> function is written on file descriptor 4,
+     so redirect this output to a normal file if you want to preserve the machine
+     dump.
+</p>
+
+ </li>
+
+ <li><p><em>graph.sh</em>: a user-friendly wrapper for the driver script described above. If
+     a Graphviz installation is found, a proper drawing of the graph of the
+     automaton is also generated.
+</p>
+
+ </li>
+
+ <li><p><em>test.scm</em>: revive a DFA from its machine dump and test it against a list of
+     samples provided from stdin.
+</p>
+
+ </li>
+</ul>
+
+<h3>Examples</h3>
+<p>We want to infer a DFA starting from the collection of sample strings in
+   <em>samples/even.sample</em>.  The given file attempts to provide enough information
+   to the algorithm to reconstruct the automaton able to recognize even numbers in
+   binary form. To generate the graph and the machine dump: <br />
+
+</p>
+<code>$ ./draw.scm &lt;samples/even.sample 4&gt;even.dump</code>
+
+<p>or, using the graph.sh script:<br /></p>
+<pre><code>
+$ ./graph.sh samples/even.sample
+Machine dump: even.dump
+Graph: even.gv
+Drawing: even.png
+</code></pre>
+<p>Let's try a more difficult challenge. We want to reconstruct the DFA from one
+   of the training sets available from the <a href="http://stamina.chefbe.net">Stamina competition
+page</a>.  Provided that the downloaded files are in
+   the <em>samples/stamina_sets</em> directory, let's first convert the data to the
+   S-expr format; a simple script is provided for the purpose: <br />
+
+</p>
+<pre><code>
+$ ./lispify.sh &lt;samples/stamina_sets/1_training.txt &gt;samples/1.sample
+$ ./graph.sh samples/1.sample
+Machine dump: 1.dump
+Graph: 1.gv
+Drawing: 1.png
+</code></pre>
+<p>We now use the reconstructed finite state machine to test it against the
+   competition test case: <br />
+</p>
+<pre><code>
+$ ./lispify.sh -t &lt;samples/stamina_sets/1_test.txt | ./test.scm 1.dump
+(0 1 1 0 0 0 0 0 0 0 0 0 0 0 0) ---&gt; #t
+(0 1 0 0 0 0 0 1 1 1 0 1) ---&gt; #t
+(0 1 1 0 1 0 0 0 0 0 1 1 1 0 0 0) ---&gt; #t
+...
+</code></pre>
+
+<h3>License</h3>
+<p>Copyright (c) 2016 Giuseppe Cocomazzi sbudella at gmail dot com
+
+</p>
+<p>Permission to use, copy, modify, and distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+</p>
+<p>THE SOFTWARE IS PROVIDED &quot;AS IS&quot; AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+</p>
+
+</body>
+</html>

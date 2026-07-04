@@ -1,0 +1,89 @@
+<!DOCTYPE HTML>
+<html>
+	<head>
+        <meta charset="UTF-8">
+  		<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  		<meta http-equiv="Pragma" content="no-cache">
+  		<meta http-equiv="Expires" content="0">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Giuseppe Cocomazzi's homepage</title>
+		<link rel="stylesheet" type="text/css" href="style.css">
+	</head>
+
+	<body>
+<table>
+<tbody>
+<tr>
+<td width="20%"><img src="me.jpg" alt="sbudella" /></td>
+<td width="80%">
+<center>
+  <h1>Giuseppe Cocomazzi</h1>
+  <h3>sbudella at gmail dot com</h3>
+"Because I don't believe that it's really desirable to have security on a computer,
+I shouldn't be willing to help uphold the security regime." - RMS
+</center>
+<center>
+<h2><a href="blog/index.html">Blog</a></h2>
+</center>
+</td>
+</tr>
+</tbody>
+</table>
+<hr />
+
+<h2>Retrospective...</h2>
+
+<h4>Disclosed vulnerabilities: <a href="stuff/v.txt">[CVEs]</a> </h4>
+<p>
+I've discovered vulnerabilities in security products and, more recently, in blockchain projects, 
+focusing on cryptography, consensus protocols, and other issues like memory corruption bugs and race conditions.
+</p>
+
+<h4>Regular Positive Negative Inference Library for Scheme and Python: <br>
+  <a href="stuff/rpnischemereadme.html">[scheme README]</a>
+  <a href="stuff/rpni-scheme.tgz">[scheme src]</a>
+  <a href="stuff/rpni-python.tgz">[python src]</a>
+</h4>  
+  <p>Simple and modular implementation of the RPNI algorithm as described in the book
+    <a href="http://www.cambridge.org/us/academic/subjects/computer-science/pattern-recognition-and-machine-learning/grammatical-inference-learning-automata-and-grammars?format=HB">Grammatical Inference, Learning Automata and Grammars</a>.
+    Tested against the <a href="https://web.archive.org/web/20230129060733/http://stamina.chefbe.net/">Stamina competition training and test suite</a>.
+    Available for Python and Scheme Lisp (requires <a href="http://www.call-cc.org">Chicken Scheme</a>).
+  </p>
+
+<h4>Virtual Dynamic Shared Objects Support and Shared Page Subsystem for FreeBSD:
+  <a href="stuff/shared_page_vdso.patch">[patch]</a>
+  <a href="stuff/shared_page_vdso.note">[paper]</a>
+  <a href="stuff/shared_page_vdso.tgz">[tgz]</a></h4>
+  <p>The kernel modification aims to introduce a stable support for 
+  	 virtual dynamic shared objects to FreeBSD, by means of memory 
+     regions shared between the kernel and any user process.
+</p>
+
+<h4>Curuncula: <a href="stuff/curuncula.tgz">[src]</a></h4>
+<p>Curuncula is a tool shipped as a loadable kernel module that detects
+   virtualization rootkits that abuse the Intel debugging support facilities;
+   rootkits that set the GD access flag are also detected.
+</p>
+
+<h4>Vsyscall Page Hijacking:
+  <a href="stuff/vsyscall_page_hijacking.txt">[paper]</a>
+  <a href="stuff/vsyscall_page_hijacking.tgz">[src]</a></h4>
+  <p>Paper appeared on the Italian security magazine
+     <a href="http://bfi.s0ftpj.org">Butchered From Inside</a>, illustrating how
+     overbloating features in the Linux kernel can be exploited to achieve syscall
+     redirection in an inedited way, namely hybrid hooking between kernel space
+     and user space.
+</p>
+
+<h4>Symbiotic Process Execution:
+  <a href="stuff/symbiotic_process_execution.it.txt">[paper-italian]</a></h4>
+  <p>Neither exec nor grugq's userland exec are necessary for code execution,
+     since symbiotic sharing of process's resources is sufficient. Paper
+     firstly appeared on the Italian security magazine
+     <a href="http://bfi.s0ftpj.org">Butchered From Inside</a>.
+</p>
+
+<h4>Claire, The Signal Context Fuzzer: <a href="stuff/claire_scfuzzer.tgz">[src]</a></h4>
+<p>The first fuzzer targeting the signal context of userland processes.</p>
+</body>
+</html>

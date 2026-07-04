@@ -1,0 +1,302 @@
+<!DOCTYPE html>                            
+<html>                                     
+<head>                                     
+  <meta name="keywords" content="hacking, reverse engineering, android">                              
+  <title>Hacking Safenet MobilePass OTP token</title>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../style.css">
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <header>
+    <h1>My self is steam</h1>
+    <p>Insights into computer security, programming and math</p>
+  </header>
+  <nav>
+    <a href="index.html">Index</a>
+    <a href="../index.html">About</a>
+    <a href="feed.xml">RSS</a>
+  </nav>
+  <hr>
+</head>  
+
+<body>
+<article>
+<h2>
+  <div class="adate">January 28, 2018</div>                                         
+  <a href="20180128-mobilepass.html">Hacking Safenet MobilePass OTP Token</a>
+</h2>
+<h3>Or, "A Secret You Own is a Secret You Pwn".</h3>
+<p>
+<b>Safenet MobilePass</b> is a software OTP token from Gemalto that,
+in its most used configuration, serves as a two-factor authentication
+solution for webmail portals.  Unfortunately, as it is often the case 
+with this kind of solutions, rather than being of any use at all, they
+show up as an obstacle to usability and personal freedom.  Not only
+does the token introduce the need to remember yet another PIN code
+for which up to three failed insertion attempts are tolerated, after
+which the prospect of an account lock becomes painfully concrete, but it
+also requires a smartphone or a Windows installation in order to run.
+As there is no place in my life for such <em>diversions</em>, I once found
+myself in the absurd situation of not being able to access my email.
+</p>
+
+<p>
+When the right to communicate, access one's own data, and carry out
+working tasks, lie on the assumption of expensive gadgets or
+unusable proprietary software as being the norm, it means that an abuse
+against a minority is being perpetrated. This assumption would equate to
+the situation of being denied the right to speak in a foreign country
+just because we have no interest in learning the local language.  As an
+instrument of oppression, I then declared Safenet MobilePass as my enemy
+to the sabotage and subversion of which I dedicated all the efforts of
+one of my weekends. When the machine oppresses, break the machine.
+</p>
+</article>
+
+<p>
+It is important to understand that the scope of this activity is neither
+the exposure of any security vulnerability nor the discussion of the
+security of the solution. Since the infosec rat-race already provides with
+plenty of such dissertations, the reader might want to look elsewhere for
+detailed "threat modeling" or "risk assessment". Or ask the vendor directly
+if concerned about his own security, the reply might not be as alarming
+as expected.
+</p>
+
+<p>
+Paradoxically I needed to use a lent Android tablet in order to reverse
+engineer the mobile application. As a no-config software advocate,
+I rejected the idea of instrumenting the code of the app, or to
+rely on any reverse engineering framework, preferring to use only a
+debugger and the decompiled code for the task.  As a consequence, the
+activity became exponentially time-consuming but ultimately rewarding.
+For starters, to my greatest astonishment the application made no use
+of any anti-debugging trick or reverse engineering deterrent, allowing
+in the end for a not-so-painful experience.  </p>
+
+<p>
+It is important to understand that the scope of this activity is neither
+the exposure of any security vulnerability nor the discussion of the
+security of the solution. Since the infosec rat-race already provides with
+plenty of such dissertations, the reader might want to look elsewhere for
+detailed "threat modeling" or "risk assessment". Or ask the vendor directly
+if concerned about his own security, the reply might not be as alarming
+as expected.
+</p>
+
+<p>
+Paradoxically I needed to use a lent Android tablet in order to
+reverse engineer the mobile application. As a minimalist and no-config
+software advocate, I refused to instrument the code of the app, or to
+rely on any reverse engineering framework, preferring to use only a
+debugger and the decompiled code for the task.  As a consequence, the
+activity became exponentially time-consuming but ultimately rewarding.
+For starters, to my greatest astonishment the application made no use
+of any anti-debugging trick or reverse engineering deterrent, allowing
+in the end for a not-so-painful experience.  </p>
+
+<p>
+According to the debugger's trace log, calls to the Android substrate
+represents the majority of function calls, but a closer look shows calls
+to methods belonging to the com.safenet package: </p>
+
+<img class="resize" src="20180128-trace01.png">
+
+<p>Also traces of apparently cryptographic material and calls to openssl
+wrappers appear:
+</p>
+
+<img class="resize" src="20180128-trace02.png">
+
+<p>
+The last returned string, in the picture starting with "A94...",
+offers a first trail to understand the behavior of the app. Indeed,
+searching for this string in the trace gives more context: calls to
+<em>android.content.ContextWrapper.getDir, android.app.ContextImpl.getDataDir</em>
+and other methods in a way or another involved in file system access,
+sourround the said returned string value.  Inspecting the decompiled
+code for function <em>c.e.t.g</em>, i.e. the function returning the
+mentioned string, we clearly see calls to other functions such as
+<em>c.e.n.a</em>: </p>
+
+<img class="resize" src="20180128-cetg01.png">
+<img class="resize" src="20180128-cena01.png">
+
+<p>This appears more evident by looking at the top of the stack trace
+of this context:</p>
+
+<img class="resize" src="20180128-cena02.png">
+
+<p>
+From the code of <em>c.e.n.a</em> we then see the application open a
+file handle at the location built from the SAFENET_TOKEN_MP3 name and
+the apparently-random string "A94..."  If this assumption held, we would
+be able to find such a file in the data directory. The assumption holds,
+indeed: </p>
+
+<img class="resize" src="20180128-datadir.png">
+
+<p>
+Multiple runs of the application show that the first line of the file
+changes at each OTP code generation. It might be the case that the
+application is actually saving its state on the file system, the nature
+of which could be a seeding number or a counter.  </p>
+
+<p>
+With the help of the decompiled code, stepping through relevant function
+calls is made easier and reveals quite a lot of information; for instance,
+one of the first functions to get called from the com.safenet package
+is <em>c.e.o.a</em>: </p>
+
+<img class="resize" src="20180128-ceoa01.png">
+
+<p>
+The object <em>this.f</em> is an instance of
+<em>com.safenet.c.e.t</em>. Due to ProGuard optimization, all class
+methods appear as overloaded with the same name but different type
+signatures: </p>
+
+<img class="resize" src="20180128-ceoa02.png"> 
+
+<p>
+Obsessively stepping through the function calls leads to the
+one which actually gets called in the context of our interest,
+in this case <em>com.safenet.c.e.t.a(java.lang.String,
+com.safenet.c.e.m, boolean)</em>, with its actual parameters
+<em>this.b, this.c and bl2</em> respectively. Although we are not
+able to inspect local variables without rebundling the application with <a
+href="https://blog.silentsignal.eu/2016/06/16/accessing-local-variables-in-proguarded-android-apps/">
+annotated symbol names</a>, we can still dump objects and their fields:
+</p> <img class="resize" src="20180128-pin01.png"> <img class="resize" src="20180128-pin02.png">
+
+<p>
+As it can be seen, the field <em>this.b</em> is exactly the name I
+assigned to my personal token, while more interestingly: </p>
+
+<img class="resize" src="20180128-pin03.png">
+
+<p>
+This is the PIN of my OTP token in memory.  Again, the latter
+does not represent a security statement (although many infosec
+professionals believe that keeping plain-text secrets in memory in
+a garbage-collected language is a vulnerability); my motivation
+is, in a sense, liberational. In this regard, I endorse
+the original meaning of the word <em>"hack"</em>, without
+any security implications (see Pastor Laphroaig's praise of <a
+href="https://www.alchemistowl.org/pocorgtfo/pocorgtfo11.pdf">junk
+hacking</a>).  From this perpective then, my goal has not been reached
+yet. What I am after is the secret key used to generate the OTP codes,
+in order to clone the token and bend it to my own will, whose extension
+collides with that of tyrannical security bullies.
+</p>
+ 
+<p>
+By attaching the debugger at a more strategic stage of execution, for
+example inside the activity window past the PIN dialog, we obtain a finer
+and more educated trace. An interesting sequence is entered within the
+context of the <em>c.e.w.a</em> function which afterwards proceeds to
+call the ssl function <em>com.safenet.openssl.d.a</em>. The latter
+returns an array of 32 bytes to the caller which surprisingly enough
+returns the generated OTP code (195494) that I obtained during
+the execution trial. Clearly, the call to <em>openssl.d.a</em> is where
+the secret key is almost certainly used to generate the MAC code used
+by <em>c.e.w.a</em> to derive the OTP from: </p>
+
+<img class="resize" src="20180128-cewa01.png">
+
+<p>The decompiled code of the <em>c.e.w.a</em> function is quite
+straightforward:</p>
+
+<img class="resize" src="20180128-cewa02.png">
+
+<p>The aforementioned openssl call is:</p>
+<pre>
+object = d.a(e.a, (byte[])object, (byte[])object2);
+</pre> 
+
+<p>
+Tracking down name references in the code reveals that the first actual
+parameter is the enum <em>com.safenet.c.e.e</em>, while the second and
+the third are more relevant. <em>Object2</em> is just a 8-bytes piece of data
+generated with only one further reference: </p>
+
+<pre>
+long l2 = this.c;
+</pre>
+
+<p>
+As regards to the second argument, <em>object</em>, we can see above
+in the code that it is just a reference to <em>this.a</em>. In other
+words, elucidating on the nature of the openssl call is just a matter
+of inspecting the current object in the stack frame once the execution
+stops at <em>com.safenet.c.e.w.a(String)</em>:
+</p>
+
+<img class="resize" src="20180128-cewa03.png">
+<img class="resize" src="20180128-cewa04.png">
+
+<p>
+We see the 'c' field having an integer value of 19, while the 'a'
+field is a suspicious 32 bytes array. Remembering that bytes are signed
+values in Java, we have a chance to give those bytes a better shape:
+</p> <img class="resize" src="20180128-cewa05.png">
+
+<p>
+The assumption is that we are in the presence of a cryptographic
+key used for the generation of the OTP.  
+Furthermore, given that the message provided
+to the openssl call, i.e. object2, is only generated by means of an
+integer, <em>this.c</em>, we can make an even-stronger assumption: the
+OTP generation algorithm is not time-based but counter based, where
+<em>this.c</em> is the counter, which then gets stored in the file
+identified before. Since the decompiled code of the <em>c.e.w.a</em>
+function is in fact an almost one-to-one translation of the HOTP reference
+implementation as per <a href="https://tools.ietf.org/html/rfc4226">RFC
+4226</a>, this assumption becomes more concrete.  </p>
+
+<p>
+Our proof of concept then takes the form of a small Python script
+which generates OTP codes according to the HOTP algorithm. Fortunately
+enough, we do not need to reimplement the algorithm from scratch as
+there are plenty of libraries already available for the task, like <a
+href="https://github.com/pyotp/pyotp">pyotp</a>.
+</p>
+
+<pre>
+import pyotp
+import base64
+import hashlib
+import os
+
+key = 'as retrieved from the memory dump'
+
+if __name__ == '__main__':
+        path = os.path.join(os.getenv('HOME'), '.mpass.ctr')
+        try:
+                f = open(path, 'r')
+                counter = int(f.read())
+        except IOError:
+                counter = 0
+        finally:
+                f = open(path, 'w')
+
+        otp = pyotp.HOTP(base64.b32encode(key), digest=hashlib.sha256)
+        print 'OTP ===> %s' % otp.at(counter)
+        f.write('%s' % (counter+1))
+        f.close()
+</pre>
+
+<p>This is the part where the drumroll starts, Mr. Safenet:</p>
+
+<img class="resize" src="20180128-otp.jpg">
+
+<p>
+Voila! It seems that I can endlessly clone my software
+token and use it wherever I want, and finally access my
+email with no restrictions!  This is what I call a real
+<b>multi</b>-factor authentication!  And it proves that <a
+href="http://www.nytimes.com/books/97/05/18/reviews/pynchon-luddite.html">yes,
+it is still O.K. to be a Luddite.</a></p>

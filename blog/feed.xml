@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>My self is steam: Giuseppe Cocomazzi's blog</title>
+  <link>https://sbudella.altervista.org/blog/</link>
+  <description>Insights into computer security, programming and math</description>
+  <language>en-us</language>
+  <lastBuildDate>Wed, 25 Feb 2026 00:00:00 GMT</lastBuildDate>
+
+  <item>
+    <title>Keep It Like a Secret: Finality and trust in commit-reveal protocols</title>
+    <link>https://www.certora.com/blog/keep-it-like-a-secret</link>
+    <description>"Trustless" bridges claim to allow secure asset exchange across chains even in the presence of malicious actors. However, we argue that truly trustless protocols based on commit-reveal schemes are actually impossible when at least one of the participants does not wait for block finality.</description>
+    <pubDate>Mon, 06 Apr 2026 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://www.certora.com/blog/keep-it-like-a-secret</guid>
+  </item>
+
+  <item>
+    <title>Subtleties of BLS Signatures</title>
+    <link>https://www.certora.com/blog/bls-signature-subtleties</link>
+    <description>This article explores an observation in the use of BLS signature aggregation within a production blockchain.</description>
+    <pubDate>Wed, 25 Feb 2026 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://www.certora.com/blog/bls-signature-subtleties</guid>
+  </item>
+
+  <item>
+    <title>Hash What You Mean</title>
+    <link>https://sbudella.altervista.org/blog/20250507-hash-what-you-mean.html</link>
+    <description>Vulnerabilities in Merkle tree implementation used for hashing collections of objects, with an application to Omni Network.</description>
+    <pubDate>Wed, 07 May 2025 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20250507-hash-what-you-mean.html</guid>
+  </item>
+
+  <item>
+    <title>Proof of Nothing</title>
+    <link>https://sbudella.altervista.org/blog/20250417-proof-of-nothing.html</link>
+    <description>Inductive Reasoning Considered Harmful for blockchain light clients.</description>
+    <pubDate>Thu, 17 Apr 2025 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20250417-proof-of-nothing.html</guid>
+  </item>
+
+  <item>
+    <title>Security Advisories for CometBFT</title>
+    <link>https://github.com/sbudella-gco/security-advisories</link>
+    <description>Missing BLS12-381 Public Key Validation, and  BLS12-381 Wrong Signature Generation in CometBFT</description>
+    <pubDate>Thu, 03 Oct 2024 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://github.com/sbudella-gco/security-advisories</guid>
+  </item>
+
+  <item>
+    <title>Ghost in the Block: Ethereum Consensus Vulnerability</title>
+    <link>https://www.asymmetric.re/blog/ghost-in-the-block-ethereum-consensus-vulnerability</link>
+    <description>Ethereum consensus vulnerability.</description>
+    <pubDate>Thu, 19 Sep 2024 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://www.asymmetric.re/blog/ghost-in-the-block-ethereum-consensus-vulnerability</guid>
+  </item>
+
+  <item>
+    <title>Timing Side Channel in Hashicorp Vault Shamir's Secret Sharing</title>
+    <link>https://sbudella.altervista.org/blog/20230330-shamir-timing.html</link>
+    <description>CVE-2023-25000</description>
+    <pubDate>Thu, 30 Mar 2023 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20230330-shamir-timing.html</guid>
+  </item>
+  
+  <item>
+    <title>The CoreDNS Cache Poisoning Conjecture</title>
+    <link>https://sbudella.altervista.org/blog/20230308-coredns-conjecture.html</link>
+    <description>CoreDNS might be vulnerable to cache poisoning attacks.</description>
+    <pubDate>Wed, 08 Mar 2023 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20230308-coredns-conjecture.html</guid>
+  </item>
+
+  <item>
+    <title>Timing Attack Side Channel in IAIK JCE DSA Implementation </title>
+    <link>https://sbudella.altervista.org/blog/20200521-iaik-timing.html</link>
+    <description>How to find side channel leaks in Java Cryptography Extension providers.</description>
+    <pubDate>Thu, 21 May 2020 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20200521-iaik-timing.html</guid>
+  </item>
+
+  <item>
+    <title>Mindreading your Ps and Qs</title>
+    <link>https://sbudella.altervista.org/blog/20200503-mindreading.html</link>
+    <description>Statistical inference of Chebyshev's bias in RSA numbers.</description>
+    <pubDate>Sun, 03 May 2020 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20200503-mindreading.html</guid>
+  </item>
+
+  <item>
+    <title>Finding Duplicate RSA Moduli in the Wild</title>
+    <link>https://sbudella.altervista.org/blog/20181211-duplicate-moduli.html</link>
+    <description>Duplicate RSA moduli census and bash interpreter abuse in the way of Diogenes.</description>
+    <pubDate>Tue, 11 Dec 2018 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20181211-duplicate-moduli.html</guid>
+  </item>
+
+  <item>
+    <title>The Penguin Still Shows Through</title>
+    <link>https://sbudella.altervista.org/blog/20180911-cve-2018-5548.html</link>
+    <description>An account of CVE-2018-5548</description>
+    <pubDate>Tue, 11 Sep 2018 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20180911-cve-2018-5548.html</guid>
+  </item>
+
+  <item>
+    <title>SQL Injection Suminagashi</title>
+    <link>https://sbudella.altervista.org/blog/20180227-suminagashi.html</link>
+    <description>Exploiting SQL injections when error messages are the only output.</description>
+    <pubDate>Tue, 27 Feb 2018 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20180227-suminagashi.html</guid>
+  </item>
+
+  <item>
+    <title>Hacking Safenet MobilePass OTP Token</title>
+    <link>https://sbudella.altervista.org/blog/20180128-mobilepass.html</link>
+    <description>A Secret You Own is a Secret You Pwn.</description>
+    <pubDate>Sun, 28 Jan 2018 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20180128-mobilepass.html</guid>
+  </item>
+
+  <item>
+    <title>Programming had Troy won the war</title>
+    <link>https://sbudella.altervista.org/blog/20170828-apl-troy.html</link>
+    <description>Literate programming in APL.</description>
+    <pubDate>Mon, 28 Aug 2017 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20170828-apl-troy.html</guid>
+  </item>
+  
+  <item>
+    <title>GNU APL on OpenBSD</title>
+    <link>https://sbudella.altervista.org/blog/20170821-apl-openbsd.html</link>
+    <description>Porting of GNU APL to OpenBSD.</description>
+    <pubDate>Mon, 21 Aug 2017 00:00:00 GMT</pubDate>
+    <guid isPermaLink="true">https://sbudella.altervista.org/blog/20170821-apl-openbsd.html</guid>
+  </item>
+
+
+
+</channel>
+</rss>

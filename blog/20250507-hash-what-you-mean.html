@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="keywords" content="hashing, merkle tree">
+  <title>Hash What You Mean</title>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../style.css">
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <header>
+    <h1>My self is steam</h1>
+    <p>Insights into computer security, programming and math</p>
+  </header>
+  <nav>
+    <a href="index.html">Index</a>
+    <a href="../index.html">About</a>
+    <a href="feed.xml">RSS</a>
+  </nav>
+  <hr>
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script>
+      window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']]
+      }
+    };
+  </script>
+</head>
+
+<body>
+  <article>
+    <h2>
+      <div class="adate">May 07, 2025</div>
+      <a href="20250507-hash-what-you-mean.html">Hash What You Mean</a>
+    </h2>
+
+<p>
+There seems to be no doubts on how to go about hashing single messages,
+under the assumption that the hash function <em>H</em> itself is not
+prone to length-extension attacks, and that the encoding of the message
+is not ambiguous: the message may be split internally into blocks, the
+blocks may be padded, etc., but the process could be generalized simply
+with \( m \mapsto H(m) \).
+
+On the contrary, when it comes to hashing collections of objects,
+the situation looks different. One first option that comes to mind is
+to convert the collection to its string representation and then hash
+it. However, this approach "delegates" the problem of ambiguity to
+the encoding or serialization function: there are indeed multiple
+ways to encode a single string, depending on whether we have
+a preference for string termination characters or for encoding
+the length of the string explicitly, in which case one needs to
+worry about the separator as well. For instance, a list such as
+<i>["storm", "rain"]</i> could be encoded as <i>"5storm,4rain"</i>
+but what about <i>["5storm,", "a"*68]</i>? With the same encoding,
+this would become: <i>"75storm,,68aaa..."</i>, which would put the
+deserializer in trouble. However, we take for granted here that
+there exist an encoding function which makes the representation
+unambiguous, provided its implementation is correct, and that multiple
+implementations are all coherent. This can be anything from ASN.1, to
+JSON and Protobuf.  Equipped with such a function, the first approach
+works, and when this function also provides means to declare the
+types of each object, and that of the container itself, it fulfills
+the <a href="https://en.wikipedia.org/wiki/Horton_principle">Horton
+principle</a>, adapted here for the context: hash what is being meant,
+not what is being said, that is, the hashed content must convey 
+indications on the way the message was constructed. If the collection happens to be a list,
+then the ordering of the objects matters and this method preserves the
+ordering as well.
+</p>
+
+<p>
+Let's consider an alternative approach, using Merkle trees. We could
+segment the collection into pairs of leaves of the tree, and then hash
+each pair to obtain the nodes, and then, recursively on the pairs of
+nodes, until we obtain the root, represented by a single hash. Even
+before the hashing operations themselves though, it becomes apparent
+that this approach presumes a whole new data structure built on top
+of the input collection: we have terminal leaves and nodes, depth and
+levels. Also, we have mentioned that the hashing itself is carried over
+pairs of elements, and so one may ask: even if we are equipped with the "optimal"
+encoding function above, how do we pick the pairs? Supposing that the
+collection is a list, how do we pair the elements?  Do we treat
+each element as a single leaf, therefore hashing pairs of elements? And
+in such case, what happens when the list has a number of elements that
+is not a power of two? Furthermore, do we start pairing from the "left",
+i.e. from the beginning of the list, or from the tail?  Each of these
+questions leads to at least two different, opinionated approaches. Let's
+find them out by taking a curious look at how these are implemented in the
+blockchain industry, which made Merkle trees popular. We will show that
+these differences, when taken on their own, are basically harmless but,
+as it is often the case with cryptographic constructions, when blended
+together lightheartedly, could lead to unintended consequences.  </p>
+
+<p>
+We start with the simplest choice, the <i>binary</i> Merkle tree. This structure
+provides an immediate answer to the questions regarding the shape of the tree
+and the pairing of the elements. We refer to the standard construction
+used for certificate transparency logs, as specified in <a href="https://datatracker.ietf.org/doc/html/rfc6962#section-2.1">RFC-6962</a>:
+the input is an <em>ordered</em> list <i>L</i> of elements which is split
+into two segments by an index <i>k</i>, where <i>k</i> is the largest
+power of two smaller than the length of L. This solves the problem of
+lists not having a power-of-two length. Each of the two segments is
+then hashed individually and the two resulting hashes are concatenated
+and hashed together. But this implies that we must necessarily use
+the first method above to further hash the sublists, or perform the
+same step recursively on the sublists. The latter case, which the
+specification mandates, introduces the necessity of discerning between
+the hash of the leaves and the hash of the nodes, and this is where
+<i>domain separation</i> comes into play: we must prepend a different
+byte when we hash one-entry lists and multi-entry ones, <i>0x00</i>
+and <i>0x01</i>, respectively.  Without domain separation, the lists \(
+[a, b] \) and \( [H(a)||H(b)] \) would yield the same root. In addition, the specification requires that
+empty lists are just hashed as the empty string. The latter requirement is
+not ambiguous because the inputs to the algorithm are lists and never single strings.
+</p>
+
+<p>
+The method is adopted by <em>CometBFT</em> to hash byte slices, and it's concisely implemented 
+<a href="https://github.com/cometbft/cometbft/blob/858345263c49ef2738deebcbe9bf12382571e6f0/crypto/merkle/tree.go#L11-L27">here</a>.
+Note their emphasis on the fact that the byte slices are ordered, and
+that the construction is order-preserving.  </p>
+
+<p>
+A different strategy is defined in the <a href="https://ethereum.github.io/consensus-specs/ssz/merkle-proofs/#generalized-merkle-tree-index">Ethereum Consensus Specs</a>,
+where Merkle trees have a first-class citizen status. In this case, the
+resulting tree is balanced, because the input list is augmented with
+the insertion of empty leaves so that the final length is a power of
+two. This allows to easily index the left and right children of a node
+<i>k</i> as <i>2k</i> and <i>2k+1</i>, respectively.  Each node is then
+the hash of its children, and the pairing starts from the tail of the
+augmented input list. Furthermore, the tree being balanced,
+combined with the fact that the position of a leaf inherently determines
+whether it is a leaf or a node, makes domain separation between single-item
+lists and nodes unnecessary.
+This construction is the backbone of Ethereum's serialization scheme
+named <em>SSZ</em>, which is used to serialize complex objects such as
+entire blocks, but also to store the deposit transactions in the deposit
+contract. Although not explicitly mentioned, both these settings require a
+strict order of the input sequence: for instance, a serializing block is
+broken into fixed-size chunks, which represent the input leaves,
+and it is rather obvious that different orderings not only would result
+in different merkle trees but also in different (and potentially invalid)
+blocks altogether when deserialized.
+</p>
+
+<p> We could say that both RFC-6962-styled and Ethereum's Merkle trees
+satisfy the Horton principle.
+</p>
+
+<p>
+Is there any relevant variation to the above "standards"? Apparently, yes.
+<a href="https://github.com/OpenZeppelin/merkle-tree">OpenZeppelin's
+Merkle tree library</a> does things differently. The library
+refers to their trees as "standard", as designed for Ethereum
+smart contracts: the input is an array of leaves of length
+<i>L</i>, and the tree is an array of size <i>2*L - 1</i>; the
+pairing starts from the tail, and each node at index <i>i</i>
+in the tree is the double hash of the concatenation of leaves at
+index <i>2*i + 1</i> and <i>2*i + 2</i> in the array of leaves, as seen <a href="https://github.com/OpenZeppelin/merkle-tree/blob/98ff55dc7b6004a6e57ca0cb256cc0d08ecb6096/src/core.ts#L19-L34">here</a>.
+The double hashing is done to disambiguate between the
+concatenation of internal nodes and single leaves without the need
+for explicit domain separation, and was introduced as a response to <a href="https://github.com/OpenZeppelin/openzeppelin-contracts/issues/3091">this issue</a>,
+which affected previous versions. Another major deviation is
+that each pair of leaves is <b>sorted</b> prior to hashing, for some
+reason. This implies that the tree does not preserve the order of the
+input sequence and, as they explain in their documentation, presumes
+that the input sequence is pre-sorted. This requirement makes sense
+for the only use case this library is advertised for: that of inclusion
+proofs for on-chain verification. In other words, the Merkle tree has
+been thought of as a structure for proving membership, <i>and only that</i>,
+disqualifying it for other uses such as the hashing of ordered collections,
+namely lists. For this latter use, the <a href="https://github.com/OpenZeppelin/merkle-tree/blob/98ff55dc7b6004a6e57ca0cb256cc0d08ecb6096/src/merkletree.ts#L62">API provides an option</a> whereby
+the sorting of pairs of leaves can be disabled.
+</p>
+
+<p>
+This is where the fun begins. As seen too often with cryptographic
+constructions, too many moving parts and options become the ingredients
+for the proverbial "hazardous material". With this tenet in mind,
+one only needs searching for projects using this library inappropriately.
+One such project is <a href="https://github.com/omni-network/omni">Omni
+Network</a>, some sort of so-called "L-1". They decided
+to port the OpenZeppelin's Merkle tree library for their
+own off-chain use, for some reason. Their rendition can be found <a href="https://github.com/omni-network/omni/blob/79f35d064bc5a0f06055937a7694fac5a6928481/lib/merkle/core.go#L29-L53">here</a>.
+Expectedly, they forgot about the optionability of the leaves pair sorting, and they only always <a href="https://github.com/omni-network/omni/blob/79f35d064bc5a0f06055937a7694fac5a6928481/lib/merkle/core.go#L204-L206">sort
+the pair of leaves</a> prior to hashing. One may think that
+their only use for the library is the same as intended, i.e. for
+generating and verifying inclusion proofs but it turns out it's not.
+They <a href="https://github.com/omni-network/omni/blob/79f35d064bc5a0f06055937a7694fac5a6928481/lib/xchain/types.go#L176-L186">define a data type</a>
+they call "XMsgs" used for cross-chain communication. The type has a field <i>LogIndex</i> which
+is the index of an event log in a block, and the field is used to "enforce" the order
+of the messages, as they claim in this specific <a href="https://github.com/omni-network/omni/pull/2156">PR</a>.
+Therefore it is correct to assume that these <i>XMsgs</i> represent an ordered
+collection of messages. This is also explicitly mentioned in this bug finding <a href="https://cantina.xyz/competitions/d139882b-2d3a-49ac-9849-9dccef584090">competition</a>,
+which precedes the PR: <q>We rely on xmsgs being ordered by log index (ascending) to build
+the xblock merkle tree</q>.
+</p>
+
+<p>
+The function that generates the Merkle
+tree of the message sequences "enforces" the ordering by <a href="https://github.com/omni-network/omni/blob/79f35d064bc5a0f06055937a7694fac5a6928481/lib/xchain/merkle.go#L64-L68">checking</a>
+that the <i>LogIndex</i> is monotonically incrementing. Afterwards, each leaf is <b>encoded</b> prior to hashing with
+<a href="https://github.com/omni-network/omni/blob/79f35d064bc5a0f06055937a7694fac5a6928481/lib/xchain/merkle.go#L96-L103">this
+function</a>.  The encoding is not something Mr. Horton would be proud of: the function <a href="https://github.com/omni-network/omni/blob/79f35d064bc5a0f06055937a7694fac5a6928481/lib/xchain/abi.go#L205-L212">encodeMsg</a>
+refers to <a href="https://github.com/omni-network/omni/blob/79f35d064bc5a0f06055937a7694fac5a6928481/lib/xchain/abi.go#L49-L57">this
+message marshalling descriptor</a> which clearly neglets to take the
+<i>LogIndex</i> into account, meaning that the latter is neither encoded
+nor hashed in the final tree.  This omission, combined with the fact
+that the pairs of leaves are pre-sorted (given that they left out the
+original OpenZeppelin's option), leads to the ordering of messages not
+being preserved, despite all their efforts to do so.
+</p>
+
+<p>
+The net results is that differently ordered <i>xchain.Msg</i>
+sequences lead to the same Merkle tree root, as demonstrated
+in this <a href="20250507-omni-merkle.patch">PoC</a>: one could not only
+swap the relative position of the leaves in a pair but also, and more
+importantly, one could alter and replace their original <i>LogIndex</i>
+arbitrarily. This means that, given a pair of cross-chain messages {"Ping", 1} and {"Pong", 2},
+one could obtain the same Merkle root with another pair {"Pong", 1} and {"Ping", 2},
+in reverse order, defying any law of cause and effect.
+The merkle trees are not exclusively used for
+membership verification but also for the verification of
+the block's message roots against attestations' roots, as found in the <a href="https://github.com/omni-network/omni/blob/79f35d064bc5a0f06055937a7694fac5a6928481/relayer/app/worker.go#L369-L396">relayer
+code</a>, defeating the original purpose's conservative design.
+It probably doesn't matter: as of their <a href="https://mainnet.omni.network/validators?height=11146668">chain's current tip</a>,
+their network runs on top of a BFT protocol with only <b>four</b> validators, so hashing sequences correctly might be the
+last of their concerns.
+</p>

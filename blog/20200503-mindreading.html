@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="keywords" content="rsa, certificates, prime numbers, number theory">
+  <title>Mindreading your Ps and Qs</title>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../style.css">
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <header>
+    <h1>My self is steam</h1>
+    <p>Insights into computer security, programming and math</p>
+  </header>
+  <nav>
+    <a href="index.html">Index</a>
+    <a href="../index.html">About</a>
+    <a href="feed.xml">RSS</a>
+  </nav>
+  <hr>
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+
+<body>
+  <article>
+    <h2>
+      <div class="adate">May 03, 2020</div>
+      <a href="20200503-mindreading.html">Mindreading your Ps and Qs</a>
+    </h2>
+
+<p>
+Consider the following:
+<blockquote>
+<u>Problem 1:</u>
+Given a set of <math><mi>n</mi></math> randomly selected
+RSA numbers, estimate the portion <math><mi>k</mi></math>
+of numbers whose composing primes both belong to the residue class
+<math><mn>3</mn><mo>&#xA0;</mo><mo>(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>)</mo></math>.
+</blockquote>
+
+<p>
+Attempting to solve this apparently innocent problem will allow us
+to range over a few interesting ideas from different disciplines.
+</p>
+
+<p>
+It is important to first identify the constraints of the problem,
+since it clearly inquires about mathematical objects whose scope 
+intersects with the domain of security: we shall define an RSA
+number to be any odd semiprime of which we observe
+neither its composing primes nor any kind of property about them.
+This definition easily applies to the public key moduli of RSA
+certificates, for instance.
+</p>
+
+<p>
+Under this setting, the problem basically asks whether it is
+possible to infer some kind of information about objects that
+are kept secret; in other words, although it is generally not possible
+to reconstruct the underlying factors, could we at least classify
+them into well-defined categories by interacting with the observables
+only? That is, given a set of <math><mi>N</mi><mo>=</mo><mi>p</mi><mi>q</mi></math>,
+could one state anything at all about both <math><mi>p</mi></math> and <math><mi>q</mi></math>
+by observing only the <math><mi>N</mi></math>s?
+</p>
+</article>
+
+<p>
+The motivation for inquiring specifically about the residue
+class of the primes is a way of restricting the domain of this hidden
+information that we want to reconstruct. Also, as it will be shown, it 
+allows us to exploit some results from number theory to our advantage.
+</p>
+
+<p>
+Let <math><msub><mi>P</mi><mn>2</mn></msub></math> be the set of all
+odd <em>semiprimes</em> below a given <math><mi>x</mi></math>:
+</p>
+
+<div class="centered">
+<math><msub><mi>P</mi><mn>2</mn></msub><mo>=</mo><mfenced open='{' close='}'><mrow><mi>p</mi><mi>q</mi><mo>&#x2264;</mo><mi>x</mi><mo>:</mo><mo>&#xA0;</mo><mi>p</mi><mo>,</mo><mi>q</mi><mo>&#x2208;</mo><mi>P</mi><mo>,</mo><mo>&#xA0;</mo><mi>a</mi><mi>n</mi><mi>d</mi><mo>&#xA0;</mo><mi>p</mi><mo>,</mo><mi>q</mi><mo>&gt;</mo><mn>2</mn></mrow></mfenced></math>.
+</div>
+
+<p>We define the following function on <math><msub><mi>P</mi><mn>2</mn></msub></math>:</p>
+
+<div class="centered">
+<math><mi>p</mi><mi>q</mi><mo>&#x21a6;</mo><mo>(</mo><mi>p</mi><mi>q</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>,</mo><mo>&#xA0;</mo><mi>p</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>,</mo><mo>&#xA0;</mo><mi>q</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>)</mo></math><br>
+</div>
+
+<p>
+This function can be also seen as a binary relation that partitions
+<math><msub><mi>P</mi><mn>2</mn></msub></math> into the following
+<math><msup><mn>2</mn><mn>3</mn></msup></math> residue classes:
+
+<math><mo>(</mo><mn>1,1,1</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>1,1,3</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>1,3,1</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>1,3,3</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>3,1,1</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>3,1,3</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>3,3,1</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>3,3,3</mn><mo>)</mo></math>.
+
+Indeed, since we ruled out all semiprimes multiple of
+<math><mn>2</math></mn>, the only possible values of the remainders
+<math><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math> are
+<math><mn>1</mn></math> and <math><mn>3</mn></math>.
+</p>
+
+<p>
+This means that each semiprime and its respective composing primes are
+congruent to any of the eight classes above, allowing us to deal with
+a much smaller set than the whole <math><msub><mi>P</mi><mn>2</mn></msub></math>.
+But we can do even better by ruling out the residues
+
+<math><mo>(</mo><mn>1,1,3</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>1,3,1</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>3,1,1</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>3,3,3</mn><mo>)</mo></math>
+
+due to the following observation: </p>
+
+<div class="centered">
+<math><mo>(</mo><mi>p</mi><mi>q</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mi>n</mi><mo>)</mo><mo>&#x2261;</mo><mo>(</mo><mi>p</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mi>n</mi><mo>&#xA0;</mo><mo>&#xb7;</mo><mo>&#xA0;</mo><mi>q</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mi>n</mi><mo>)</mo><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mi>n</mi></math>
+</div>
+
+<p>The proof is self-evident if we remember that:</p>
+<div class="centered">
+<math xmlns="http://www.w3.org/1998/Math/MathML"><mo>&#xA0;</mo><mspace linebreak="newline"/><mmultiscripts><mo>&#x21d2;</mo><mprescripts/><mrow><msub><mi>r</mi><mi>q</mi></msub><mo>&#x2261;</mo><mi>q</mi><mo>&#xa0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xa0;</mo><mi>n</mi></mrow><mrow><msub><mi>r</mi><mi>p</mi></msub><mo>&#x2261;</mo><mi>p</mi><mo>&#xa0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xa0;</mo><mi>n</mi></mrow></mmultiscripts><msub><mi>r</mi><mi>p</mi></msub><mo>&#xb7;</mo><msub><mi>r</mi><mi>q</mi></msub><mo>&#x2261;</mo><mi>p</mi><mo>&#xb7;</mo><mi>q</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mi>n</mi></math>
+</div>
+
+<p>
+So basically the residue classes where the modulo of the semiprime is
+not congruent to the product of the modulo of its composing primes are
+necessarily empty.
+</p>
+
+<p>
+Our residue system of the semiprimes is then:
+<math><msub><mi>R</mi><mn>2</mn></msub><mo>=</mo><mo>{</mo><mo>(</mo><mn>1,1,1</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>1,3,3</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>3,1,3</mn><mo>)</mo><mo>,</mo><mo>&#xA0;</mo><mo>(</mo><mn>3,3,1</mn><mo>)</mo><mo>}</mo></math>.
+
+In the limit, one would expect roughly
+equal portions of integers in the two residue classes
+<math><mn>1</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>
+and
+<math><mn>3</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>,
+that is:
+</p>
+
+<div class="centered">
+<math><mi>#</mi><mo>{</mo><mi>s</mi><mo>&#x2261;</mo><mn>1</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>,</mo><mo>&#xA0;</mo><mi>s</mi><mo>&#x2208;</mo><msub><mi>P</mi><mn>2</mn></msub><mo>}</mo><mo>=</mo><mi>#</mi><mo>{</mo><mi>s</mi><mo>&#x2261;</mo><mn>3</mn><mo>&#xa0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xa0;</mo><mn>4</mn><mo>,</mo><mo>&#xa0;</mo><mi>s</mi><mo>&#x2208;</mo><msub><mi>P</mi><mn>2</mn></msub><mo>}</mo></math>
+</div>
+
+<p>
+The two quantities differ
+according to a phenomenon known as Chebyshev's bias (<a
+href="https://arxiv.org/abs/0908.0093">Kevin Ford, Jason Sneed,
+<em>Chebyshev's bias for products of two primes</em></a>). The
+bias generally arises when the two residue classes in the
+comparison are both neither quadratic residues nor quadratic
+nonresidues; indeed, <math><mn>1</mn></math> is a quadratic residue
+<math><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math> but
+<math><mn>3</mn></math> is not. However, the bias is much more pronounced
+for the residue system of the primes, while for the semiprimes the bias
+is so small that the previous identity can be replaced in practice with:
+</p>
+
+<div class="centered">
+<math><mi>#</mi><mo>{</mo><mi>s</mi><mo>&#x2261;</mo><mn>1</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>,</mo><mo>&#xA0;</mo><mi>s</mi><mo>&#x2208;</mo><msub><mi>P</mi><mn>2</mn></msub><mo>}</mo><mo>&#x2248;</mo><mi>#</mi><mo>{</mo><mi>s</mi><mo>&#x2261;</mo><mn>3</mn><mo>&#xa0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xa0;</mo><mn>4</mn><mo>,</mo><mo>&#xa0;</mo><mi>s</mi><mo>&#x2208;</mo><msub><mi>P</mi><mn>2</mn></msub><mo>}</mo></math>
+</div>
+
+<p>
+The latter espression essentially says that the semiprimes are equally
+partitioned between the two residue classes, meaning that if we
+pick a semiprime less than a given value, it will be congruent
+to either <math><mn>1</mn></math> or <math><mn>3</mn></math>
+<math><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>
+with the same probability. This would preclude any
+possibility of estimating which residue classes its
+generating primes belong to.  Indeed, if we picked for example an
+<math><mi>s</mi><mo>&#x2261;</mo><mn>1</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>,
+it would either mean
+<math><mi>p</mi><mo>&#x2261;</mo><mn>1</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>&#xA0;</mo><mo>&#x2227;</mo><mo>&#xA0;</mo><mi>q</mi><mo>&#x2261;</mo><mn>1</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>,
+or
+<math><mi>p</mi><mo>&#x2261;</mo><mn>3</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>&#xA0;</mo><mo>&#x2227;</mo><mo>&#xA0;</mo><mi>q</mi><mo>&#x2261;</mo><mn>3</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>
+but none of the two hypothesis would have even the smallest "advantage",
+as the information about the residue classes of the generating primes
+is lost forever due to multiplication, which could be seen as an
+entropy black hole where even this one-bit of information about
+<math><mi>p</mi></math> and <math><mi>q</mi></math> is destroyed.
+</p>
+
+<p>
+There is a subtle mistake in this line of reasoning, though. The previous
+result states something about a residue system of only two classes, while
+the system of our investigation has four. We are implicitly assuming that,
+since the semiprimes are equally partitioned between the two classes,
+the composing primes are further as equally partitioned among the four
+residue classes. This assumption is indeed wrong, and by computing the
+actual distribution among the residue classes we convice
+ourselves by experiencing at the same time a far larger phenomenon.  </p>
+
+<p>
+Let's first compute the number of odd semiprimes less
+than <math><msup><mn>10</mn><mi>t</mi></msup></math>
+for each <math><mi>t</mi><mo>&#x2208;</mo><mi
+mathvariant="double-struck">N</mi></math>; this sequence is known as <a
+href="https://oeis.org/A066265">A066265</a> when each of its elements is
+<math><msub><mi>π</mi><mn>2</mn></msub><mo>(</mo><mi>x</mi><mo>)</mo></math>,
+the count of all semiprimes (both even and odd) less than
+<math><mi>x</mi></math>. Although an exact formula for the calculation of
+<math><msub><mi>π</mi><mn>2</mn></msub><mo>(</mo><mi>x</mi><mo>)</mo></math>
+<a href="https://mathworld.wolfram.com/Semiprime.html">exists</a>,
+it still requires iterating through all the primes up to the square
+root of <math><mi>x</mi></math>: this can require substantial time and
+computational resources, and it's the main reason why A066265 stops at
+<math><msup><mn>10</mn><mn>21</mn></msup></math> and will probably not
+grow much during this lifetime.
+</p>
+
+<p>
+Our needs are different though: not only do we need the
+exact count of the odd semiprimes at regular intervals,
+but we do also need to progressively count the congruence of each
+<math><mo>(</mo><mi>p</mi><mi>q</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>,</mo><mo>&#xA0;</mo><mi>p</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>,</mo><mo>&#xA0;</mo><mi>q</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>)</mo></math>
+to any of the four residue classes, up to <math><mi>x</mi></math> rather
+than its square root. This makes the computation even more demanding
+than the one involving the closed formula.
+</p>
+
+<p>
+My modest means indeed allows me to obtain only the counts up to
+<math><msup><mn>10</mn><mn>12</mn></msup></math>, but this is
+enough to notice the major pattern underpinning the discussion:
+</p>
+
+<div class="centered" style="font-size: 65%">
+<div style="display: inline-block; text-align: left;"> 
+<math><msup><mn>10</mn><mn>3</mn></msup></math>;(1, 3, 3): 35.294%;(3, 1, 3): 29.412%;(3, 3, 1): 18.137%;(1, 1, 1): 17.157%;204<br>
+<math><msup><mn>10</mn><mn>4</mn></msup></math>;(1, 3, 3): 31.748%;(3, 1, 3): 30.010%;(3, 3, 1): 19.632%;(1, 1, 1): 18.609%;1956<br>
+<math><msup><mn>10</mn><mn>5</mn></msup></math>;(1, 3, 3): 30.375%;(3, 1, 3): 29.668%;(3, 3, 1): 20.186%;(1, 1, 1): 19.770%;18245<br>
+<math><msup><mn>10</mn><mn>6</mn></msup></math>;(1, 3, 3): 29.612%;(3, 1, 3): 29.220%;(3, 3, 1): 20.686%;(1, 1, 1): 20.482%;168497<br>
+<math><msup><mn>10</mn><mn>7</mn></msup></math>;(1, 3, 3): 29.081%;(3, 1, 3): 28.917%;(3, 3, 1): 21.067%;(1, 1, 1): 20.935%;1555811<br>
+<math><msup><mn>10</mn><mn>8</mn></msup></math>;(1, 3, 3): 28.732%;(3, 1, 3): 28.656%;(3, 3, 1): 21.340%;(1, 1, 1): 21.272%;14426124<br>
+<math><msup><mn>10</mn><mn>9</mn></msup></math>;(1, 3, 3): 28.480%;(3, 1, 3): 28.446%;(3, 3, 1): 21.554%;(1, 1, 1): 21.520%;134432669<br>
+<math><msup><mn>10</mn><mn>10</mn></msup></math>;(1, 3, 3): 28.289%;(3, 1, 3): 28.272%;(3, 3, 1): 21.727%;(1, 1, 1): 21.712%;1258822220<br>
+<math><msup><mn>10</mn><mn>11</mn></msup></math>;(1, 3, 3): 28.136%;(3, 1, 3): 28.128%;(3, 3, 1): 21.872%;(1, 1, 1): 21.864%;11840335764<br>
+<math><msup><mn>10</mn><mn>12</mn></msup></math>;(1, 3, 3): 28.011%;(3, 1, 3): 28.008%;(3, 3, 1): 21.992%;(1, 1, 1): 21.989%;111817881036<br>
+</div>
+</div>
+
+<p>
+The last column of each row shows the count of all odd semiprimes up
+to the power of <math><mn>10</mn></math> in the first column. The
+other columns are the percentage of each residue class.  As we can
+see, the classes are not at all equally apportioned! In particular,
+each of the residue classes of <math><mi>p</mi><mi>q</mi></math> (the
+first number of each triple) is always split into one dominant class
+and a minor one. Therefore, if we pick an odd semiprime less than,
+say, <math><msup><mn>10</mn><mn>12</mn></msup></math>, whose remainder
+<math><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>
+is <math><mn>1</mn></math>, its generating primes
+will have a higher probability to be both congruent to
+<math><mn>3</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>
+than to
+<math><mn>1</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>.
+</p>
+
+<p>
+These calculations seems to confirm
+another notable result in number theory (<a
+href="http://www.math.ubc.ca/~gerg/teaching/592-Fall2018/papers/2016.Dummit.pdf">David
+Dummit, Andrew Granville, and Hershy Kisilevsky, <em>Big
+biases amongst products of two primes</em></a>); therein, an
+asymptotic formula for the ratio between the odd semiprimes congruent to
+<math><mo>(</mo><mn>1</mn><mo>,</mo><mn>3</mn><mo>,</mo><mn>3</mn><mo>)</mo></math>
+and one quarter of the count of all odd semiprimes up to a given
+<math><mi>x</mi></math> guarantees the ratio to be always slightly
+greater than and slowly converging to <math><mn>1</mn></math>: </p>
+
+<div class="centered">
+<math><mi>r</mi><mo>(</mo><mi>x</mi><mo>)</mo><mo>=</mo><mfrac><mrow><mi>#</mi><mo>{</mo><mi>p</mi><mi>q</mi><mo>&#x2264;</mo><mi>x</mi><mo>&#xa0;</mo><mo>:</mo><mo>&#xa0;</mo><mi>p</mi><mo>&#x2261;</mo><mi>q</mi><mo>&#x2261;</mo><mn>3</mn><mo>&#xa0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xa0;</mo><mn>4</mn><mo>}</mo></mrow><mrow><mfrac><mn>1</mn><mn>4</mn></mfrac><mo>{</mo><mi>p</mi><mi>q</mi><mo>&#x2264;</mo><mi>x</mi><mo>}</mo></mrow></mfrac><mo>&#x2265;</mo><mn>1</mn><mo>+</mo><mfrac><mrow><mn>1</mn><mo>+</mo><mi>o</mi><mo>(</mo><mn>1</mn><mo>)</mo></mrow><mrow><mn>3</mn><mo>(</mo><mi>l</mi><mi>o</mi><mi>g</mi><mi>l</mi><mi>o</mi><mi>g</mi><mi>x</mi><mo>-</mo><mn>1</mn><mo>)</mo></mrow></mfrac></math>
+</div>
+
+<p>
+The attentive reader may notice that the latter
+observation would very well apply to the two residue
+classes <math><mo>(</mo><mn>3,1,3</mn><mo>)</mo></math> and
+<math><mo>(</mo><mn>3,3,1</mn><mo>)</mo></math>. However, these
+two classes are, in a sense, just one single opaque instance: if
+one picked a semiprime that is congruent to <math><mn>3</mn></math>
+there would be no way to decide which among <math><mi>p</mi></math>
+and <math><mi>q</mi></math> is congruent to <math><mn>1</mn></math>
+and which is congruent to <math><mn>3</mn></math>, despite the
+counts of the two classes differ considerably; this is due to the
+commutative property of multiplication. Therefore, although the bias
+affects all the four residue classes, under the setting of the
+RSA numbers it gives an advantage whenever the semiprime is congruent to
+<math><mn>1</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>.
+</p>
+
+<p>
+An interesting application worth exploring would be
+the "probabilistic" optimization of naive factorization algorithms like <a
+href="https://en.wikipedia.org/wiki/Fermat%27s_factorization_method">Fermat's</a>,
+by testing for candidate factors both congruent to 
+<math><mn>3</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>
+first.
+</p>
+
+<p>
+But let's go back to our former <u>Problem 1</u>. We notice that
+it possesses all the features of a binomial experiment: herein the
+random variable <math><mn>Y</mn></math> models the number of semiprimes
+congruent to <math><mo>(</mo><mn>1,3,3</mn><mo>)</mo></math> among a
+larger set of <math><mi>n</mn></math> semiprimes randomly extracted
+from the set of all semiprimes below a given <math><mn>x</mn></math>.
+There are indeed only two possible outcomes for each extraction:
+either the semiprime is congruent to that class or it is congruent
+to any of the remaining three. We will denote the probability of the
+former outcome with <math><mi>θ</mi></math>, its converse is therefore
+<math><mo>(</mo><mn>1</mn><mo>-</mo><mi>θ</mi><mo>)</mo></math>.
+(Technically, since we do not reintroduce each of the extracted semiprime
+back in the set, further selections are not independent since there would be
+fewer semiprimes to select from; a more "accurate" distribution than the
+binomial would then be the hypergeometric. However, for large populations
+like that of semiprimes, we can consider the events as independent). </p>
+
+<p>
+There a few caveats, though. One might argue that the number
+of the occurrences of the congruences of interest changes as the
+value of <math><mi>x</mi></math> increases; this might suggest that
+the Poisson-Binomial distribution is a better choice to model the
+problem, since we know both empirically and from the expression
+of <math><mi>r</mi><mo>(</mo><mi>x</mi><mo>)</mo></math> that
+<math><mi>θ</mi></math> slowly decreases. However, we will see that
+<math><mi>θ</mi></math> does not change much even for large values
+of <math><mi>x</mi></math>, therefore we keep the calculations simple by
+adopting the binomial distribution, as they could get quite
+involved with the Poisson-Binomial distribution.
+</p>
+
+<p>
+The probability that <math><mi>k</mi></math> out of
+<math><mi>n</mi></math> odd semiprimes are congruent to
+<math><mo>(</mo><mn>1,3,3</mn><mo>)</mo></math> is therefore: </p>
+
+<div class="centered">
+<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>P</mi><mo>(</mo><mi>Y</mi><mo>=</mo><mi>k</mi><mo>)</mo><mo>=</mo><mfenced><mrow><mtable><mtr><mtd><mi>n</mi></mtd></mtr><mtr><mtd><mi>k</mi></mtd></mtr></mtable></mrow></mfenced><msup><mi>θ</mi><mi>k</mi></msup><mo>(</mo><mn>1</mn><mo>-</mo><mi>θ</mi><msup><mo>)</mo><mrow><mi>n</mi><mo>-</mo><mi>k</mi></mrow></msup></math>
+</div>
+
+<p>
+Under the assumption of the binomial model, the probability
+<math><mi>θ</mi></math> that each semiprime is congruent
+to <math><mo>(</mo><mn>1,3,3</mn><mo>)</mo></math> never
+changes. We might be tempted to use directly one of the values of
+<math><mi>θ</mi></math> that we obtained empirically, however, since
+the size of the <math><mi>n</mn></math> semiprimes can span several
+different order of magnitudes, this approach represents too much of an
+approximation. Indeed, if the assumption holds that the semiprimes are
+randomly selected from a larger population, they could very well lie
+below, say, <math><msup><mn>10</mn><mn>12</mn></msup></math> as well as below
+<math><msup><mn>10</mn><mn>617</mn></msup><mo>&#x2248;</mo><msup><mn>2</mn><mn>2048</mn></msup></math>.
+As already mentioned, empirical calculations above
+<math><msup><mn>10</mn><mn>24</mn></msup></math> are out of question.
+</p>
+
+<p>
+The solution is to <em>estimate</em> the parameter
+<math><mi>θ</mi></math> of the distribution. Among the several
+methods to estimate a distribution parameter, we opt for the <em>Maximum
+Likelihood Estimation</em>: a function of <math><mi>θ</mi></math> called
+the <em>likelihood</em> is generally differentiated in order to obtain
+its maxima. For the binomial distribution this method yields <math><mover
+accent='true'><mi>θ</mi><mo>^</mo></mover><mo>=</mo><mfrac><mi>k</mi><mi>n</mi></mfrac></math>
+as the most likely estimator, that is, the proportion of positive trials. By
+taking into account the expression of Dammit et al. for
+<math><mi>r</mi><mo>(</mo><mi>x</mi><mo>)</mo></math> we obtain: </p>
+
+<div class="centered">
+<math><mover accent='true'><mi>θ</mi><mo>^</mo></mover><mo>=</mo><mfrac><mi>k</mi><mi>n</mi></mfrac><mo>&#x2248;</mo><mfrac><mn>1</mn><mn>4</mn></mfrac><mo>+</mo><mfrac><mn>1</mn><mrow><mn>12</mn><mo>(</mo><mi>l</mi><mi>o</mi><mi>g</mi><mi>l</mi><mi>o</mi><mi>g</mi><mi>x</mi><mo>-</mo><mn>1</mn><mo>)</mo></mrow></mfrac></math>
+</div>
+
+<p>
+This represents a good (under)estimation of <math><mi>θ</mi></math>
+for large values of <math><mn>x</mn></math>. Let's test its performance
+with a concrete example. Let's collect all those numbers from the <a
+href="https://en.wikipedia.org/wiki/RSA_Factoring_Challenge">RSA
+factoring challenge</a> that have been <a
+href="20200503-rsa-numbers.csv">factored</a> so far; they amount to
+<math><mi>n</mi><mo>=</mo><mn>23</mn></math>, and the biggest of them is
+in the order of <math><msup><mn>10</mn><mn>250</mn></msup></math>. How
+many of them could we expect to be congruent to
+<math><mo>(</mo><mn>1,3,3</mn><mo>)</mo></math>?  We must interpret the
+problem in the sense that the <math><mi>n</mi><mo>=</mo><mn>23</mn></math>
+numbers have been randomly picked from the set of all semiprimes below
+<math><msup><mn>10</mn><mn>250</mn></msup></math> where each of them
+have the same probability <math><mi>θ</mi></math> of being congruent to
+<math><mo>(</mo><mn>1,3,3</mn><mo>)</mo></math>.  By using our estimator
+<math><mover accent='true'><mi>θ</mi><mo>^</mo></mover></math> we get a
+value of <math><mi>θ</mi></math> equal to <math><mn>0.2656</mn></math>.
+We plug it into the equation of the binomial distribution for different
+values of k; we compare the results with the same distribution under
+the assumption that the residue class has the same probability than the
+others: </p>
+
+<div class="centered">
+<img class="resize" src="20200503-binomial-01.png">
+</div>
+
+<p>
+For <math><mi>θ</mi><mo>=</mo><mn>0.2656</mn></math> the probability
+is maximized at <math><mi>k</mi><mo>=</mo><mn>6</mn></math>,
+while the unbiased <math><mi>θ</mi></math> "predicts"
+<math><mi>k</mi><mo>=</mo><mn>5, 6</mn></math> with equal probability. Of
+course, it is more revealing to calculate the probability that
+the set contains at least <math><mn>6</mn></math> numbers that
+are congruent to the residue class: we obtain <math><msub><mi>P</mi><mover
+accent='true'><mi>θ</mi><mo>^</mo></mover></msub><mo>(</mo><mi>Y</mi><mo>&#x2265;</mo><mn>6</mn><mo>)</mo><mo>=</mo><mn>0.41</mn></math>
+and <math
+xmlns="http://www.w3.org/1998/Math/MathML"><msub><mi>P</mi><mrow><mi>θ</mi><mo>=</mo><mn>0.25</mn></mrow></msub><mo>(</mo><mi>Y</mi><mo>&#x2265;</mo><mn>6</mn><mo>)</mo><mo>=</mo><mn>0.34</mn></math>
+under the two hypothesis, respectively.  Since these
+<math><mn>23</mn></math> RSA numbers have been factored,
+we can verify both claims.  There are indeed exactly
+<math><mn>7</mn></math> RSA numbers in the set that are
+congruent to <math><mo>(</mo><mn>1,3,3</mn><mo>)</mo></math>
+and only <math><mn>4</mn></math> are congruent to
+<math><mo>(</mo><mn>1,3,3</mn><mo>)</mo></math>. Not bad.
+</p>
+
+<p>
+Let's finally consider the whole set of the numbers of the RSA
+challenge. We have a total of <math><mi>n</mi><mo>=</mo><mn>54</mn></math>
+semiprimes, the majority of which have not been factored.  For such large
+values of <math><mi>n</mi></math>, we calculate the binomial coefficient
+with Stirling's approximation. The estimator obtained for values of
+<math><mi>x</mi><mo>&#x2264;</mo><msup><mn>10</mn><mn>617</mn></msup></math>
+is <math><mover
+accent='true'><mi>θ</mi><mo>^</mo></mover><mo>=</mo><mn>0.2633</mn></math>,
+and the probability is maximed as per <em>Fig 2</em>:
+
+<div class="centered">
+<img class="resize" src="20200503-binomial-02.png">
+</div>
+
+We therefore estimate that the probability of having
+at least <math><mi>k</mi><mo>=</mo><mn>14</mn></math>
+semiprimes whose composing primes are both congruent to
+<math><mn>3</mn><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn></math>
+is <math><msub><mi>P</mi><mover
+accent='true'><mi>θ</mi><mo>^</mo></mover></msub><mo>(</mo><mi>Y</mi><mo>&#x2265;</mo><mn>14</mn><mo>)</mo><mo>=</mo><mn>0.46</mn></math>.
+As the factorization of the biggest RSA numbers will probably never
+happen in this lifetime of ours, knowing this tiny piece of information
+about their secret primes is already a victory, although it might
+not help us become eligible for any cash prize.
+</p>
+</body>
+</html>

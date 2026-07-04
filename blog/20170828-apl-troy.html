@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="keywords" content="programming, apl">
+  <title>Programming had Troy won the war</title>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../style.css">
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <header>
+    <h1>My self is steam</h1>
+    <p>Insights into computer security, programming and math</p>
+  </header>
+  <nav>
+    <a href="index.html">Index</a>
+    <a href="../index.html">About</a>
+    <a href="feed.xml">RSS</a>
+  </nav>
+  <hr>
+</head>
+
+<body>
+  <article>
+    <h2>
+      <div class="adate">August 28, 2017</div>
+      <a href="20170828-apl-troy.html">Programming had Troy won the war</a>
+    </h2>
+    <p>
+    A form of self improvement can be found in attempting to implement
+    algorithms, no matter how simple, in less conventional programming
+    languages. This kind of activity can sometime lead to the same
+    enlightenment experienced in solving the best linguistic riddles: our
+    personal boundaries are broadened by a transversal understanding, as
+    opposed to cognitive experiences circumscribed to a defining set of rules
+    (logical or mathematical puzzles, for instance).  I currently regard APL as
+    one of the best programming languages with which to explore new approaches
+    to problem solving; its highly compositional power combined with the
+    orthogonality of its rich set of operators enable the programmer to focus
+    her efforts on the problem itself rather than struggling with the
+    limitations or the burdens imposed by the language peculiarities.
+    </p>
+  </article>
+
+    <p>
+    I have personally found this same quality in only a few languages, such as
+    Scheme (and more generally Lisp), and what I call non-monadic-Haskell
+    (a sort of subset of Haskell as used in <a href="https://en.wikipedia.org/wiki/Richard_Bird_(computer_scientist)">Richard Bird's</a> books. In other words, I tend
+    to dislike a programming language when the cognitive strain required
+    for the language's artifacts themselves exceeds the effort to solve
+    the problem at hand. In <a href="https://en.wikipedia.org/wiki/Alan_Perlis">
+    Alan Perlis'</a> words:
+    </p>
+    <q>
+    A programming language is low level when its programs require attention
+    to the irrelevant.
+    </q>
+
+    <p>
+    It is important to note that this strain I refer to is different than the
+    normal dedication required to master a language, expecially of a different
+    paradigm. It seems that the aforementioned quality reflects also in an
+    often-underestimated aspect of programming that is almost forgotten in the
+    age of Github: communicating programs and ideas about programs and
+    programming concepts in general should not be confused with documentation
+    nor reduced to the exchange of source code. More importantly, the less
+    interference from tangential tools like analogies, natural languages and
+    diagrams (or more generally any form of meta-language) in conveying these
+    ideas, the more expressive and rich the language prooves. Again, in the
+    <a href="http://www.jsoftware.com/papers/perlis78.htm">words</a>
+    of Alan Perlis:
+    </p>
+    <q>
+    LISP has a very precious character, if indeed there are some people who can
+    express programming ideas to other people in the language in which they
+    program.
+    </q>
+
+    <p>
+    The same principle seems to be involved whenever formal reasoning about
+    programs is concerned. Deriving programs from their specification,
+    manipulating and calculating them furtherly to optimize them by means of
+    algebraic properties is basically an activity of the same nature as
+    discussing and conveying ideas about programs, as stated above.
+    </p>
+
+    <p>
+    It is a natural observation that, at the very end, the essence of a
+    programming language that shows useful for the domain it targets is a form
+    of data transformation according to a model; in that regard, sometimes the
+    choice of the right main data abstraction at the stage of language design
+    has proven remarkably successful to the extent that the bond between the
+    language and the model itself is so strong that one would abscribe the
+    merits of the language itself to the modelling power of the data structure
+    and the operations onto it. Examples of this bond are surely LISP's lists,
+    Unix's stress on flat text files and the consequent ubiquitosness of
+    regular expressions as the main model for tokenization/manipulation, and
+    APL's arrays.
+    </p>
+
+    <p>
+    It is in support of this modelling power that I personally interpret 
+    the overlooked importance of new consistent notation systems and
+    syntax: LISP's s-expressions, Unix's regex syntax and APL notorious
+    notation are long standing examples of this concept. More important 
+    elaborations on this topic can be found in
+    <a href="http://www.jsoftware.com/papers/tot.htm">Kenneth's Iverson's
+    famous paper</a>.
+    Wondering whether it's the notation a necessary emergence to serve the
+    model or the other way around is not so dissimilar to engaging in the
+    discussion on
+    <a href="https://en.wikipedia.org/wiki/Linguistic_relativity">Linguistic
+    relativity</a>.
+    </p>
+
+    <p>
+    Diversions aside, as mentioned in the introduction, there is no better way
+    to prove these remarks and to entertain oneself at the same time than with
+    a concrete example. I will introduce an algorithm by means of APL
+    expressions only, rather than describing the ideas in natural language and
+    then translating it. I want to show if it is feasible to describe an
+    algorithm by actually implementing it directly. The point of the 
+    exposition is to show the algorithm, not the features of the language,
+    that nevertheless will become evident as the discussion progresses;
+    however, wherever possible, I will comment on the least clear parts.
+    For a compendium of APL operators, the reader should refer to
+    the excellent <a href="http://microapl.com/apl_help/ch_020_020.htm">reference</a>.
+    </p>
+
+    <p>
+    A few "language peculiarities" first:
+    <pre>
+        ⎕IO
+    1
+        ⍳10
+    1 2 3 4 5 6 7 8 9 10
+
+        ⎕IO←0
+        ⎕IO  
+    0
+        ⍳10
+    0 1 2 3 4 5 6 7 8 9
+
+        bar←5
+        ⎕←bar←5
+    5 
+
+        ⎕UCS'A'
+    65    
+        ⎕UCS'Hello'
+    72 101 108 108 111
+    </pre>
+    </p>
+
+    <p>
+    Functions:
+    <pre>
+    ∇R←Sqr x
+      R←x*2
+    ∇
+        Sqr 2
+    4
+        Sqr 3
+    9
+
+    ∇R←Foo x; bar 
+      R←x + ⎕←bar←Sqr x
+    ∇
+        Foo 10
+    100
+    110
+
+        bar
+    5 
+    </pre>
+    </p>
+
+    </pre>
+    </p>
+
+    <p>
+    Given a vector <em>v</em> and a scalar <em>k</em> and an integer
+    <em>n</em>, the following relations hold:
+    <pre>
+    (⍴v) = +/~0×v
+    (n⍴k) = k+0×⍳n
+    </pre>
+    In case of <em>v</em> vector of characters (string) and <em>k</em> character:
+    <pre>
+    (⍴v) = +/~0×⎕UCSv
+    (n⍴k) = ⎕UCS(⎕UCS k)+0×⍳n
+    </pre>
+    </p>
+
+    <p>
+    Then:
+    <pre>
+        str←'SIMONUMENTUMREQUIRESCIRCUMSPICE'
+        ⍴str
+    31
+        (⍴str) = +/~0×⎕UCSstr
+    1
+        (⍴str)⍴1
+    1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+        ⍴(⍴str)⍴1
+    31
+        2,2⍴1
+    2 1 1
+        (⍴str)⍴2,2⍴1
+    2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2
+    </pre>
+    </p>
+
+    <p>
+    Let's define a dyadic function <em>n Segment v</em> so that,
+    given an integer <em>n</em> and a vector <em>v</em>, the following
+    relations hold:
+    <pre>
+    (+/⍴¨nSegment v) = ⍴v
+    sz ≤ (⍴sz←⍴¨nSegment v)⍴n
+    ⊃,/nSegment v = v 
+    </pre>
+    The function is easily defined with the help of the "partition" operator ⊂:
+    <pre>
+    ∇Segment
+      R←n Segment x          
+      R←((⍴x)⍴2,((n-1)⍴1))⊂ x
+    ∇
+        3Segment str
+    SIM ONU MEN TUM REQ UIR ESC IRC UMS PIC E
+        2Segment str
+    SI MO NU ME NT UM RE QU IR ES CI RC UM SP IC E 
+    </pre>
+    In fact:
+    <pre>
+        (⍴str)⍴2,2⍴1
+    2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2
+        2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 1 1 2 ⊂ x
+    SIM ONU MEN TUM REQ UIR ESC IRC UMS PIC E 
+    </pre>
+    </p>
+
+    <p>
+    Each segment <em>x</em> produced is trasformed by the function
+    <em>Three2four</em> for which the following relations hold:
+    <pre>
+    4 = ⍴Three2four x
+    4⍴6 = ⍴¨Three2four x
+    (⊃,/{⍵∈Bool}¨Three2four x) = 24⍴1   ⍝ which is equivalent to
+    ({⍵∈Bool}¨Three2four x) = (24⍴2 1 1 1 1 1) ⊂ 24⍴1
+    </pre>
+    where <em>Bool</em> is simply: <em>Bool←⍳2</em>
+    </p>
+
+    <p>
+    Thanks to the power of the "partion" operator ⊂ in the last equation,
+    the function <em>Three2four</em> derives almost naturally from the latter:
+    <pre>
+    ∇Three2four x
+      R←Three2four x                              
+      R←(24⍴2 1 1 1 1 1)⊂,⍉(8⍴2)⊤((⎕UCSx),0 0)[⍳3]
+    ∇
+        Three2four'SIM'
+    0 1 0 1 0 0  1 1 0 1 0 0  1 0 0 1 0 1  0 0 1 1 0 1 
+        ⍴Three2four'SIM'
+    4
+        ⍴¨Three2four'SIM'
+    6 6 6 6
+        {⍵∈Bool}¨Three2four 'SIM'
+    1 1 1 1 1 1  1 1 1 1 1 1  1 1 1 1 1 1  1 1 1 1 1 1 
+
+        (8⍴2)⊤3
+    0 0 0 0 0 0 1 1
+        (8⍴2)⊤3 4 5
+    0 0 0
+    0 0 0
+    0 0 0
+    0 0 0
+    0 0 0
+    0 1 1
+    1 0 0
+    1 0 1
+
+        ⍉(8⍴2)⊤3 4 5
+    0 0 0 0 0 0 1 1
+    0 0 0 0 0 1 0 0
+    0 0 0 0 0 1 0 1
+        ⍴⍉(8⍴2)⊤3 4 5
+    3 8
+        ⍴,⍉(8⍴2)⊤3 4 5
+    24
+        ,⍉(8⍴2)⊤3 4 5
+    0 0 0 0 0 0 1 1 0 0 0 0 0 1 0 0 0 0 0 0 0 1 0 1
+        ((⎕UCS'ABC'),0 0)
+    65 66 67 0 0
+        ((⎕UCS'ABC'),0 0)[⍳3]
+    65 66 67
+        ((⎕UCS'AB'),0 0)[⍳3]
+    65 66 0
+        ((⎕UCS'A'),0 0)[⍳3]
+    65 0 0
+
+        ⍴Three2four¨3Segment 'ABC'
+    1
+        ⍴Three2four¨3Segment 'ABCDEF'
+    2
+        Three2four¨3Segment 'ABCDEF'
+    0 1 0 0 0 0  0 1 0 1 0 0  0 0 1 0 0 1  0 0 0 0 1 1    0 1 0 0 0 1  0 0 0 1 0 0 
+    0 1 0 1 0 1  0 0 0 1 1 0  
+        ⍴3Segment 'ABCDEF'
+    2
+        ⍴3Segment str  
+    11
+        ⊃,/Three2four¨3Segment 'ABCDEF'
+    0 1 0 0 0 0  0 1 0 1 0 0  0 0 1 0 0 1  0 0 0 0 1 1  0 1 0 0 0 1  0 0 0 1 0 0 
+    0 1 0 1 0 1  0 0 0 1 1 0 
+        ⍴⊃,/Three2four¨3Segment 'ABCDEF'
+    8
+        2⊥¨⊃,/Three2four¨3Segment 'ABCDEF'
+    16 20 9 3 17 4 21 6
+
+        2⊥¨⊃,/Three2four¨3Segment str   
+    20 52 37 13 19 52 57 21 19 20 21 14 21 5 21 13 20 36 21 17 21 20 37 18 17 21 13 
+    3 18 21 9 3 21 20 53 19 20 4 37 3 17 16 0 0
+    </pre>
+    </p>
+
+    <p>
+    If we define the constant:
+    <pre>
+    MAP←'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='
+        ⍴MAP
+    65
+    </pre>
+    We are finally able to map triplets of characters to quadruplets:
+    <pre>
+        2⊥¨⊃,/Three2four¨3Segment 'ABCDEF'
+    16 20 9 3 17 4 21 6
+
+        MAP[16 20 9 3 17 4 21 6]
+    QUJDREVG
+    </pre>
+    </p>
+
+    <p>
+    In case the reader is still wondering, the algorithm described is
+    <em>Base64 encoding</em>.
+    </p>
+
+    <p>
+    The description of the encoding algorithm is then complete once we designate
+    a padding mechanism. As we already saw, the <em>Segment</em> function
+    does not always partition its vector argument in triplets, because of the
+    order relation, rather than the equality:
+    <pre>
+    sz ≤ (⍴sz←⍴¨nSegment v)⍴n
+    </pre>
+    We then pad "irregular" segments with the help of the dyadic "pick" ⊃ operator.
+    The complete <em>Base64encode</em> function is hence:
+    <pre>
+    ∇Base64encode
+      R←Base64encode str; segs; ns
+      ns←2⊥¨⊃,/Three2four¨segs←3Segment str
+      R←MAP[(¯1↑⍴¨segs) ⊃ ns ((¯2↓ns),64 64) ((¯1↓ns),64) ns]
+    ∇
+        ⎕←ns←2⊥¨⊃,/Three2four¨segs←3Segment str
+    20 52 37 13 19 52 57 21 19 20 21 14 21 5 21 13 20 36 21 17 21 20 37 18 17 21 13 
+    3 18 21 9 3 21 20 53 19 20 4 37 3 17 16 0 0
+
+        segs
+    SIM ONU MEN TUM REQ UIR ESC IRC UMS PIC E 
+
+        (¯1↑⍴¨segs)
+    1
+        ((¯2↓ns),64 64)
+    20 52 37 13 19 52 57 21 19 20 21 14 21 5 21 13 20 36 21 17 21 20 37 18 17 21 13 
+            3 18 21 9 3 21 20 53 19 20 4 37 3 17 16 64 64
+
+        MAP[64]
+    =
+        MAP[((¯2↓ns),64 64)]
+    U0lNT05VTUVOVFVNUkVRVUlSRVNDSVJDVU1TUElDRQ==
+
+        Base64encode'SIMONUMENTUMREQUIRESCIRCUMSPICE'
+    U0lNT05VTUVOVFVNUkVRVUlSRVNDSVJDVU1TUElDRQ==
+    </pre>
+    </p>
+
+    <p>
+    To recap:
+    <pre>
+    ∇Base64encode
+      R←Base64encode str; segs; ns
+      ns←2⊥¨⊃,/Three2four¨segs←3Segment str
+      R←MAP[(¯1↑⍴¨segs) ⊃ ns ((¯2↓ns),64 64) ((¯1↓ns),64) ns]
+    ∇
+
+    ∇Three2four x
+      R←Three2four x                              
+      R←(24⍴2 1 1 1 1 1)⊂,⍉(8⍴2)⊤((⎕UCSx),0 0)[⍳3]
+    ∇
+
+    ∇Segment
+      R←n Segment x          
+      R←((⍴x)⍴2,((n-1)⍴1))⊂ x
+    ∇
+    </pre>
+
+    </p>
+
+    <p>
+    Decoding is quite straightforward and an almost symmetric operation:
+    <pre>
+    ∇Base64decode
+      R←Base64decode str
+      ,/Four2three¨4Segment str
+    ∇
+
+    ∇Four2three
+      R←Four2three x
+      R←⎕UCS 2⊥¨(24⍴2 1 1 1 1 1 1 1)⊂,⍉(6⍴2)⊤MAP⍳x
+    ∇
+    </pre>
+    </p>
+
+    <p>
+    However, the shortness of the solution should not deceive: I am sure that
+    shorter and more elegant solutions are possible in other languages but
+    conciseness is not the point of the discussion here.
+    </p>
+
+    <p>
+    Although the exposition might appear convoluted in the awkward
+    attempt to establish mathematical relations mixed with expressions
+    evaluated directly by the interpreter, the reader may want to agree at
+    least on the fact that, assuming no knowledge of the algorithm and little
+    or no experience with the language APL, the algorithm itself as seen from
+    afar appears as nothing more than <b>"moulding"</b> of data.
+    No notions of loops, conditionals, control flow and, more importantly,
+    bitwise operations were needed. As a consequence the code itself becomes
+    an almost direct specification of the algorithm which is free of any
+    orthogonal constructs that are a by-product of the language or, worse,
+    of the machine architecture. Furthermore, the concise mathematical notation
+    of the APL language allowed for only a minimum-to-absent use of any
+    meta-language to specify properties or facts about the code.
+    </p>
+
+    <p>
+    I doubt that a programmer would have thought of the solution on pen and
+    paper by orchestrating her actions according to a machine's way of operation;
+    there is at least a layer of translation ongoing every time we transfer our
+    thought process to the interpeter, a translation that adapts our thoughts
+    to the constraints of the language.  With some languages, like APL or
+    Haskell or LISP, this layer shrinks and leaves room to a more natural
+    representation, and I honestly have the feeling that such a form of
+    representation better reflects what actually happens in my brain while
+    thinking about or dealing with <q>"computational phenomena".</q>
+    </p>
+
+
+
+</body>
+</html>

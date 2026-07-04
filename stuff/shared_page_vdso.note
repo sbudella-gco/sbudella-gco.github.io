@@ -1,0 +1,120 @@
+This little paper describes the general working concepts of the patch.
+It is far from being detailed. For more information, please ask the author:
+sbudella at gmail dot com
+
+***** Intro.
+
+The patch aims to implement a stable support for virtual dynamic shared objs,
+by means of memory regions shared between the kernel and every user process.
+It is made of two main parts: a kernel side code and a user side one.
+
+***** Kernel space.
+
+The idea behind the code is that of a stail queue of shared pages
+structures, each one providing a special memory entry in process's address
+space that could be used theoretically for everything needs to be shared
+between the kernel space and the user space. Our aim is to provide
+suitable memory entries to house little virtual dynamic shared objects,
+one of which can be the syscall trampoline vdso or a generic vdso which holds
+process information exported to user space (pid, etc) to avoid syscall overhead.
+A shared page can be of three types:
+
+ - SPAGE_META : meta shared page (MI);
+ - SPAGE_GENERIC : general purpose shared page (MI);
+ - SPAGE_SCTRAMP : syscall trampoline shared page (MD);
+
+A shared page descriptor contains five fields, besides a stailq entry:
+
+ - addr : address where the spage is mapped to;
+ - size : size of the memory region the spage refers to;
+ - type : one of the three types seen above;
+ - vdso : tells whether the spage contains a virtual dynamic shared object;
+ - priv : for private use.
+
+Our shared pages are mapped in the address space of each just born process,
+by means of the <vm_spage_alloc> function, called by <exec_new_vmspace> and
+<vm_forkproc> in the SPAGE_GENERIC case, and by <exec_setregs> and
+<cpu_fork> in the SPAGE_SCTRAMP case. The meta shared page needs further
+mention: it is meant to contain informations, such as those referring to
+spage descriptor fields, on every other shared page mapped in the proc's AS;
+it is always the head of the singly-linked tailq of shared pages; when a
+SPAGE_GENERIC or a SPAGE_SCTRAMP is being requested, the meta shared page
+memory content is automatically updated with the proper data related to the
+new shared page. Remember to map just one meta spage before every other else.
+
+Support functions to speed up things and optimize memory usage between parents
+and children processes are also provided: see <vm_spage_copy>.
+
+The shared pages are appropiately filled with a vdso, depending on the
+shared page type: the generic spage hosts a generic vdso (vdso_generic.so)
+which holds symbols related to: pid, ppid, pgrp, sid, uid, euid, gid and egid.
+of the current process. A function named <vdso_setup> will take care of
+setting up these symbols according to the process properties and will
+make the vdso propagate to user space.
+For what concerns the sctramp shared page, a syscall trampoline is copied in it,
+this being a function lying in a vdso which can be of two different kinds,
+according to the SEP bit:
+ - vdso_sctramp_int0x80.so : execute syscalls using the old int instruction;
+ - vdso_sctramp_sysenter.so : use the (not yet supported) sysenter instruction;
+The decision is taken by the <trampoline_init> function called by <cpu_startup>.
+When a process is created, the syscall trampoline vdso is copied in its
+SPAGE_SCTRAMP shared page, accordingly.
+All vdsos are built with a special linker script.
+
+The interface between kernel and user space is provided by the meta shared page,
+already described: the elf fixup routine will care to insert two auxiliary elf
+entries containing the address of the metaspage and the number of shared pages,
+if present, respectively. In this way, the interpreter could easily manage
+every shared page content (mostly vdsos) with only one elf aux info, avoiding
+to have an aux info per spage.
+A sysctl returning the address of the meta shared page is also provided, but
+not used.
+
+***** User space (syscall trampoline: MD).
+
+So we have just designed a generic way of sharing data between the
+kernel and the user space; in the address space of each process resides a
+special entry named syscall trampoline, which stores the code that would
+let user programs access the kernel when invoking syscalls (i386-specific).
+Obviously, the glue in this mechanism is the system libc: every user program
+uses wrappers provided by the libc to perform syscalls, and these wrappers
+directly use the 'int' instruction. Thus we shall modify the libc kernel
+access scheme to suit our needs.
+
+At that end, we have defined a <sctramp_entry> symbol in the sctramp vdso,
+representing its entry point, that must be exactly what the libc wrappers
+will call from now on, in a generic and instruction-independent way using
+the following macro:
+	#define KERNCALL	call *CNAME(sctramp_entry) 
+whatever code sctramp_entry points to.
+The interpreter gets the meta shared page address by the
+AT_META_SPAGE auxiliary elf entry and read its memory content to obtain
+informations on shared pages; when a shared page address pointing to a vdso
+is found in the metaspage, the interpreter cares to manage it in a manner 
+similar to that used for common shared objects, although vdso's are already 
+loaded in memory and we need only to create the proper object descriptors for
+the interpreter purposes; this mechanism allows us to see vdso's symbols
+with the standard interface to the dynamic linker: we retrieve in this way
+our <sctramp_entry> address that is sheer entry point of the sctramp vdso;
+all this work happens in the csu, which is linked against every standard
+binary object, thus we can get the libc accessing the symbol without
+reference issues.
+
+***** User Space (process informations: MI).
+
+Generally, we can access vdso's symbols by the standard interface to the
+dynamic linker, that is dlsym, in our case.
+This is the way we retrieve the generic vdso's symbols regarding process
+informations; in fact, new libc wrappers such as
+getpid, getppid, etc, are provided, which don't get process info by means
+of syscall but by accessing generic vdso's symbols that hold that info,
+previously set up by kernel code: this should reduce syscall overhead. 
+
+***** Notes.
+
+The dynamic linker is compiled against libc_pic.a and does not make use of
+of crt* code, so accessing <sctramp_entry> in the rtld code would
+break things, hence we define a local version of it anchored to the top of the
+rtld's stack, to avoid relocation problems.
+
+- Giuseppe Cocomazzi, October 2009 

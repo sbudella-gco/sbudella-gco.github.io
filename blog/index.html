@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Giuseppe Cocomazzi's blog</title>
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../style.css">
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <header>
+    <h1>My self is steam</h1>
+    <p>Insights into computer security, programming and math</p>
+  </header>
+  <nav>
+  <a href="index.html">Index</a>
+  <a href="../index.html">About</a>
+  <a href="feed.xml">RSS</a>
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script>
+      window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']]
+      }
+    };
+  </script>  
+  </nav>
+  <hr>
+</head>
+
+<body>
+  <div id="articles">
+<article>
+    <h2>
+      <div class="adate">April 6, 2026</div>
+      <a href="https://www.certora.com/blog/keep-it-like-a-secret">Keep It Like a Secret: Finality and trust in commit-reveal protocols</a>
+    </h2>
+<p>
+"Trustless" bridges claim to allow secure asset exchange across chains even in the presence of malicious actors. 
+However, we argue that truly trustless protocols based on commit-reveal schemes are actually impossible when 
+at least one of the participants does not wait for block finality.
+</p>
+</article>
+  <a href="https://www.certora.com/blog/keep-it-like-a-secret">Read more (Certora blog)</a>
+<hr>
+  
+<article>
+    <h2>
+      <div class="adate">February 24, 2026</div>
+      <a href="https://www.certora.com/blog/bls-signature-subtleties">Subtleties of BLS Signatures</a>
+    </h2>
+<p>
+This article explores an observation in the use of BLS signature aggregation within a production blockchain.
+When it is used for batch verification, the possibility of "conjugate signatures" could allow colluding 
+parties to undermine system properties of accountability and non-repudiation.
+</p>
+</article>
+  <a href="https://www.certora.com/blog/bls-signature-subtleties">Read more (Certora blog)</a>
+<hr>
+  
+<article>
+    <h2>
+      <div class="adate">May 07, 2025</div>
+      <a href="20250507-hash-what-you-mean.html">Hash What You Mean</a>
+    </h2>
+
+<p>
+There seems to be no doubts on how to go about hashing single messages,
+under the assumption that the hash function <em>H</em> itself is not
+prone to length-extension attacks, and that the encoding of the message
+is not ambiguous: the message may be split internally into blocks, the
+blocks may be padded, etc., but the process could be generalized simply
+with \( m \mapsto H(m) \).
+
+On the contrary, when it comes to hashing collections of objects,
+the situation looks different...
+</article>
+<a href="20250507-hash-what-you-mean.html">Read more</a>
+<hr>
+
+<article>
+    <h2>
+      <div class="adate">April 17, 2025</div>
+      <a href="20250417-proof-of-nothing.html">Proof of Nothing</a>
+    </h2>
+    <h3>Or, Inductive Reasoning Considered Harmful</h3>
+<p>
+I've always wondered what the ubiquitous word "proof" really means 
+in the context of the blockchain industry. As originally intended in
+"Proof of work", formerly conceived as an anti-spam technique, the
+meaning of the word lies on the probabilistic assumption that it takes
+a certain amount of computation to find the correct pre-image that
+hashes to a specific "shape". This assumption is largely justified by
+the fact that the cryptographic hash functions involved are a good enough
+approximation of the random oracle model (and not viceversa). Furthermore,
+the probabilities involved only offer a bound whereby one could quantify
+the likelihood of finding such a preimage. There is no "inference"
+based on past data.  In a sense, the conclusion is quite deductive,
+following from the premises of the model.
+In contrast, the form of probabilistic reasoning anchored
+in reality, which subscribes to the school
+of thought that sees the human brain inferring new facts from past
+observations with a certain probability, is known
+as <em>Inductive Reasoning</em>, and has been the subject of many
+<a href="https://en.wikipedia.org/wiki/Problem_of_induction">philosophical arguments</a>.
+</p>
+
+<p>
+When it comes to "Proof of Stake", largely popularized by post-merge
+Ethereum and Tendermint, assigning the right meaning to the same word is not so
+straightforward...
+</article>
+<a href="20250417-proof-of-nothing.html">Read more</a>
+<hr>
+
+<article>
+    <h2>
+      <div class="adate">October 3, 2024</div>
+      <a href="index.html">Security Advisories for CometBFT</a>
+    </h2>
+<p>
+Two cryptographic issues in CometBFT's implementation of BLS12-381:<br>
+<br>
+<a href="https://github.com/asymmetric-research/security-advisories/blob/main/advisories/2024-09-25_cometbft-bls12381-key-validation.md">Missing BLS12-381 Public Key Validation</a>
+<br/>
+<a href="https://github.com/asymmetric-research/security-advisories/blob/main/advisories/2024-09-25_cometbft-bls12381-double-hash.md">BLS12-381 Wrong Signature Generation</a>
+</p>
+</article>
+<hr>
+
+<article>
+    <h2>
+      <div class="adate">September 19, 2024</div>
+      <a href="https://www.asymmetric.re/blog/ghost-in-the-block-ethereum-consensus-vulnerability">Ghost in the Block: Ethereum Consensus Vulnerability</a>
+    </h2>
+<p>
+In this blog post, we will show how a small difference in SSZ deserialization between 
+the <a href="https://github.com/prysmaticlabs/prysm">Prysm</a> and <a href="https://github.com/sigp/lighthouse">Lighthouse</a> clients could have allowed an attacker to severely degrade Ethereum consensus.
+</p>
+</article>
+  <a href="https://www.asymmetric.re/blog/ghost-in-the-block-ethereum-consensus-vulnerability">Read more (Asymmetric Research blog)</a>
+<hr>
+  
+<article>
+    <h2>
+      <div class="adate">March 30, 2023</div>
+      <a href="20230330-shamir-timing.html">Timing Side Channel in Hashicorp Vault Shamir's Secret Sharing</a>
+    </h2>
+    <h3>CVE-2023-25000</h3>
+
+<p>
+This article discusses the
+technicalities of <em>CVE-2023-25000</em>, a timing
+side-channel vulnerability I discovered in Hashicorp Vault. From the <a
+href="https://discuss.hashicorp.com/t/hcsec-2023-10-vault-vulnerable-to-cache-timing-attacks-during-seal-and-unseal-operations/52078">official
+advisory</a>: </p>
+
+<blockquote>
+HashiCorp Vault’s implementation of Shamir’s secret sharing used
+precomputed table lookups, and was vulnerable to cache-timing attacks. An
+attacker with access to, and the ability to observe a large number of
+unseal operations on the host through a side channel may reduce the
+search space of a brute force effort to recover the Shamir shares. This
+vulnerability, CVE-2023-25000, is fixed in Vault 1.13.1, 1.12.5,
+and 1.11.9.
+</blockquote>
+</article>
+  <a href="20230330-shamir-timing.html">Read more</a>
+<hr>  
+
+
+<article>
+    <h2>
+      <div class="adate">March 8, 2023</div>
+      <a href="20230308-coredns-conjecture.html">The CoreDNS Cache Poisoning Conjecture</a>
+    </h2>
+
+<p>
+One of the most important breakthroughs of recent years
+in the field of network security was the revival of the <a
+href="https://www.linuxjournal.com/content/understanding-kaminskys-dns-bug">original
+Kaminsky's</a> cache poisoning attack by <a
+href="https://www.saddns.net/">Keyu Man et al.</a>: thanks to a
+side-channel affecting the ICMP rate limit in the Linux kernel network
+stack, the technique showed how it was possible to unveil the source port
+of the UDP request initiated by a DNS resolver towards the name server.
+The original attack by Dan Kaminsky exploited the small space of random
+transaction IDs, $2^{16}$, to bypass the bailiwick rule which prevented
+rogue glue records from being cached. The fix at the time introduced
+yet more $2^{16}$ bits of randomness by requiring that all source ports of UDP
+requests initiated by the resolver be randomized.  The SADDNS attack
+demonstrated that the randomized port could be discovered by leveraging
+the side-channel in order to infer which initiated UDP
+ports are effectively open during a port scan, therefore reducing again
+the effort to mount the cache poisoning. Indeed, due to the fact that the
+UDP protocol is connection-less, when the resolver initiates the
+requests, anybody knowing the source port number could send datagrams to
+the underlying socket, by using the source port as the destination. "Private" UDP sockets
+are also susceptible of this behavior, with the additional requirement
+that the illegitimate datagrams must spoof the legitimate IP address the
+resolver formerly contacted.  The side channel, and a few more that were
+discovered by the same group, were promptly fixed by the kernel team by
+randomizing the way the rate limit counter was incremented.  Regardless of
+the means by which it was deployed, the technique brought to attention once again
+the importance of randomized source ports of the client-side UDP requests,
+since they represent the one half of the randomness required
+to thwart the original cache poisoning attack, the other half being the
+transaction IDs.
+</p>
+
+<p>
+With these last observations in mind, I decided to go code
+spelunking through <a href="https://github.com/coredns/coredns">CoreDNS</a> source code...
+</p>
+</article>
+  <a href="20230308-coredns-conjecture.html">Read more</a>
+<hr>  
+
+<article>
+    <h2>
+      <div class="adate">May 21, 2020</div>
+      <a href="20200521-iaik-timing.html">Timing Attack Side Channel in IAIK JCE DSA Implementation</a>
+    </h2>
+
+<p>
+IAIK-JCE is a provider for the Java Cryptography Extension that,
+according to the vendor, <em>"supplements the security functionality
+of the default JDK"</em>. It is a commercial product developed by <a
+href="https://jce.iaik.tugraz.at/about-us/">Stiftung Secure Information
+and Communication Technologies</a>, a spin-off of the Institute for
+Applied Information Processing and Communication” (IAIK) of the
+University of Graz. The company is kind enough to offer a full,
+free evaluation version for any non-commercial use.
+</p>
+
+<p>
+By observing the behavior of the latest version (5.60 as of today), one can get
+a glimpse of how the major cryptographic algorithms are implemented. This
+process led me to the discovery of a subtle vulnerability in the
+implementation of the DSA algorithm: the way that some of the computations
+involved in the signature generation are carried out introduces a side
+channel that leaks timing information from the observation of which an
+attacker could potentially recover the private key.
+</p>
+</article>
+  <a href="20200521-iaik-timing.html">Read more</a>
+<hr>  
+
+<article>
+    <h2>
+      <div class="adate">May 03, 2020</div>
+      <a href="20200503-mindreading.html">Mindreading your Ps and Qs</a>
+    </h2>
+
+<p>
+Consider the following:
+<blockquote>
+<u>Problem 1:</u>
+Given a set of <math><mi>n</mi></math> randomly selected
+RSA numbers, estimate the portion <math><mi>k</mi></math>
+of numbers whose composing primes both belong to the residue class
+<math><mn>3</mn><mo>&#xA0;</mo><mo>(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mn>4</mn><mo>)</mo></math>.
+</blockquote>
+
+<p>
+Attempting to solve this apparently innocent problem will allow us
+to range over a few interesting ideas from different disciplines.
+</p>
+
+<p>
+It is important to first identify the constraints of the problem,
+since it clearly inquires about mathematical objects whose scope 
+intersects with the domain of security: we shall define an RSA
+number to be any odd semiprime for which we do not directly observe
+neither its composing primes nor any kind of property about them.
+This definition easily applies to the public key moduli of RSA
+certificates, for instance.
+</p>
+
+<p>
+Under this setting, the problem basically asks whether it is
+possible to infer some kind of information about objects that
+are kept secret; in other words, although it is generally not possible
+to reconstruct the underlying factors, could we at least classify
+them into well-defined categories by interacting with the observables
+only? That is, given a set of <math><mi>N</mi><mo>=</mo><mi>p</mi><mi>q</mi></math>,
+could one state anything at all about both <math><mi>p</mi></math> and <math><mi>q</mi></math>
+by observing only the <math><mi>N</mi></math>s?
+</p>
+
+  </article>
+  <a href="20200503-mindreading.html">Read more</a>
+<hr>
+
+  <article>
+    <h2>
+      <div class="adate">December 11, 2018</div>
+      <a href="20181211-duplicate-moduli.html">Finding Duplicate RSA Moduli in the Wild</a>
+    </h2>
+    <h3>Or, programming in the way of Diogenes</h3>
+
+<p> Let's imagine one is assigned the problem of finding duplicate
+RSA moduli in all publicly available SSL certificates on the Internet,
+the reason being a census of public hosts sharing the
+same modulus.  </p>
+
+<p> Most of the time, if not always, having the same modulus equates
+to saying that the certificates share the same public key, the
+latter being the tuple composed of the public exponent and the
+modulus.  Indeed, the public exponent is often chosen between the
+values 3, 17 and 2^16 + 1, as this leads to fast exponentiation
+operations.  Therefore, under this conditions, it is the modulus to
+be responsible for the uniqueness of the public key.  </p>
+
+<p> In this setting, the certificates fall into three distinct sets
+that, from a security standpoint, delineate a simple yet interesting
+threat model.  </p>
+
+<p>The first one is the set of all the certificates for which no
+duplicates occur; the second is the set of all the certificates
+with shared moduli/public keys belonging to the same organization.
+The third and most interesting one is the set of all those duplicates
+that appear to belong to different, unrelated actors.  </p>
+
+<p> The assumptions under which the latter two sets are meant, which
+hence form the basis of the model, are those where an entry in the
+third set would represent a concrete threat to
+those parties whose modulus is non-unique; while an entry
+in the second set, although not representative of best-practices,
+could be more easily justified as the result of key or certificate
+reusage, a common custom on the Internet.  </p>
+</article>
+  <a href="20181211-duplicate-moduli.html">Read more</a>
+<hr>
+  <article>
+    <h2>
+      <div class="adate">September 11, 2018</div>
+      <a href="20180911-cve-2018-5548.html">The Penguin Still Shows Through</a>
+    </h2>
+	<h3>An account of CVE-2018-5548</h3>
+
+<p>
+Sometimes a technical discipline manages to reach the point of providing
+the wrong answers to the right problems, as in the case of what is
+commonly misnamed Software Engineering.  It may also happen that
+a whole industry is built on the belief that no answers to the wrong
+problems is a profitable strategy to respond to the demanding needs of
+an ever-growing customer base.  Historically, such a case is exemplified
+by the infosec industry. It's a sterile exercise to acknowledge that the industry has 
+reached the point where flame wars about irresponsible disclosure,
+embargos and branded vulnerabilities are the major pillars of its dialectic.  
+Thirty years after the Morris Worm, we are still dealing with 
+WannaCry, after all. </p>
+<p>
+My little personal contribution to the gallery of infosec failures is
+the discovery of a vulnerability in F5 BIG-IP.
+The vulnerability has been assigned <a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2018-5548">CVE-2018-5548</a>.</p>
+</article>
+  <a href="20180911-cve-2018-5548.html">Read more</a>
+<hr>
+
+  <article>
+    <h2>
+      <div class="adate">February 27, 2018</div>
+      <a href="20180227-suminagashi.html">SQL Injection Suminagashi</a>
+    </h2>
+<p>
+I once found myself in the oppressive situation in which 
+the only interaction with the underlying machine was
+through a rather restrictive application delivered as
+an X11-forwarded GUI communicating with a
+SAP database named <a href="https://www.sap.com/hk/products/sybase-ase.html">
+Sybase ASE</a>. The interaction was only in the form of
+insertion of text into input fields. The majority of these input fields
+only allowed for thirty-two-characters-long strings but there 
+were exceptions depending on the context. Also, a sanitization 
+mechanism was in place, transforming all characters to uppercase,
+truncating input at the occurrence of spaces, stripping single quotes 
+and escapes other metacharacters. The only feedback from the database 
+was in the form of error messages.
+</p>
+<p>Within such restricted environments the artist finds the liminal space for self-expression.</p>
+</article>
+  <a href="20180227-suminagashi.html">Read more</a>
+<hr>
+
+<article>
+<h2>
+  <div class="adate">January 28, 2018</div>                                         
+  <a href="20180128-mobilepass.html">Hacking Safenet MobilePass OTP Token</a>
+</h2>
+<h3>Or, "A Secret You Own is a Secret You Pwn".</h3>
+<p>
+<b>Safenet MobilePass</b> is a software OTP token from Gemalto that,
+in its most used configuration, serves as a two-factor authentication
+solution for webmail portals.  Unfortunately, as it is often the case
+with this kind of solutions, rather than being of any use at all, they
+show up as an obstacle to usability and personal freedom.  Not only
+does the token introduce the need to remember yet another PIN code
+for which up to three failed insertion attempts are tolerated, after
+which the prospect of an account lock becomes painfully concrete, but it
+also requires a smartphone or a Windows installation in order to run.
+As there is no place in my life for such <em>diversions</em>, I once found
+myself in the absurd situation of not being able to access my email.
+</p>
+
+<p>
+When the right to communicate, access one's own data, and carry out
+working tasks, lie on the assumption of expensive gadgets or
+unusable proprietary software as being the norm, it means that an abuse
+against a minority is being perpetrated. This assumption would equate to
+the situation of being denied the right to speak in a foreign country
+just because we have no interest in learning the local language.  As an
+instrument of oppression, I then declared Safenet MobilePass as my enemy
+to the sabotage and subversion of which I dedicated all the efforts of
+one of my weekends. When the machine oppresses, break the machine.
+</p>
+</article>
+  <a href="20180128-mobilepass.html">Read more</a>
+<hr>
+
+  <article>
+    <h2>
+      <div class="adate">August 28, 2017</div>
+      <a href="20170828-apl-troy.html">Programming had Troy won the war</a>
+    </h2>
+    <p>
+    A form of self improvement can be found in attempting to implement
+    algorithms, no matter how simple, in less conventional programming
+    languages. This kind of activity can sometime lead to the same
+    enlightenment experienced in solving the best linguistic riddles: our
+    personal boundaries are broadened by a transversal understanding, as
+    opposed to cognitive experiences circumscribed to a defining set of rules
+    (logical or mathematical puzzles, for instance).  I currently regard APL as
+    one of the best programming languages with which to explore new approaches
+    to problem solving; its highly compositional power combined with the
+    orthogonality of its rich set of operators enable the programmer to focus
+    her efforts on the problem itself rather than struggling with the
+    limitations or the burdens imposed by the language peculiarities.
+    </p>
+  </article>
+  <a href="20170828-apl-troy.html">Read more</a>
+<hr>
+ <article>
+    <h2>
+      <div class="adate">August 21, 2017</div>
+      <a href="20170821-apl-openbsd.html">GNU APL on OpenBSD</a>
+    </h2>
+
+    <p>
+    In order to run the <a href="https://www.gnu.org/software/apl/">GNU APL</a>
+    interpreter on OpenBSD, that to the best of my knowledge seems to be
+    one of the very few free
+    <a href="https://sites.google.com/site/baavector/interpreters">APL interpreters</a>
+    available, I created a port that I currently mantain and that will be part
+    of the next OpenBSD release (by the time of this writing is planned to be
+    the 6.2). I also packaged 
+    <a href="http://www.apl385.com/fonts/index.htm">Adrian Smith's original
+    fonts</a>, which are now a dependency of the GNU APL package.
+    For the time being I host both ports on my home page as well.
+    </p>
+  </article>
+  <a href="20170821-apl-openbsd.html">Read more</a>
+<hr>
+  </div>
+</body>
+</html>

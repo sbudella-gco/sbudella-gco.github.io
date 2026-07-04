@@ -1,0 +1,1790 @@
+diff -uprN src.orig/lib/csu/i386-elf/crt1.c src/lib/csu/i386-elf/crt1.c
+--- src.orig/lib/csu/i386-elf/crt1.c	2009-02-08 19:08:51.000000000 +0100
++++ src/lib/csu/i386-elf/crt1.c	2009-10-06 20:19:21.000000000 +0200
+@@ -31,6 +31,7 @@
+ #endif /* lint */
+ 
+ #include <stdlib.h>
++#include <dlfcn.h>
+ 
+ #include "libc_private.h"
+ #include "crtbrand.c"
+@@ -44,6 +45,7 @@ extern void _fini(void);
+ extern void _init(void);
+ extern int main(int, char **, char **);
+ extern void _start(char *, ...);
++extern void sctramp_default(void);
+ 
+ #ifdef GCRT
+ extern void _mcleanup(void);
+@@ -55,6 +57,14 @@ extern int etext;
+ char **environ;
+ const char *__progname = "";
+ 
++/*
++ * Here we declare the symbol used by libc function wrappers to access
++ * the kernel. It has to be defined here because libc has not any
++ * startup code; if it's found a syscall trampoline vdso, this symbol
++ * refers to its entry point (vsctramp_entry).
++ */
++u_long sctramp_entry = (u_long) sctramp_default;
++
+ static __inline fptr
+ get_rtld_cleanup(void)
+ {
+@@ -68,6 +78,18 @@ get_rtld_cleanup(void)
+ 	return(retval);
+ }
+ 
++static caddr_t 
++get_sctramp_entry(void)
++{
++	caddr_t sctmp;
++
++	sctmp = dlsym(RTLD_DEFAULT, "vsctramp_entry");
++	if (sctmp == NULL)
++		return ((caddr_t) sctramp_default);
++
++	return (sctmp);
++}
++
+ /* The entry function. */
+ void
+ _start(char *ap, ...)
+@@ -106,7 +128,14 @@ _start(char *ap, ...)
+ 	monstartup(&eprol, &etext);
+ __asm__("eprol:");
+ #endif
++
+ 	_init();
++	/*
++	 * Get the syscall trampoline vdso's entry point by the
++	 * dynamic linker interface.
++	 */
++	sctramp_entry = (u_long) get_sctramp_entry();
++
+ 	exit( main(argc, argv, env) );
+ }
+ 
+diff -uprN src.orig/lib/csu/i386-elf/crti.S src/lib/csu/i386-elf/crti.S
+--- src.orig/lib/csu/i386-elf/crti.S	2009-02-08 19:08:51.000000000 +0100
++++ src/lib/csu/i386-elf/crti.S	2009-10-06 20:02:41.000000000 +0200
+@@ -39,3 +39,13 @@ _fini:
+ 
+ 	.section .rodata
+ .ascii "$FreeBSD: src/lib/csu/i386-elf/crti.S,v 1.7 2005/05/19 07:31:06 dfr Exp $\0"
++
++	.text
++	.align	4, 0x90
++	.globl	sctramp_default
++	.type	sctramp_default, @function
++sctramp_default:
++	popl	%ecx
++	int	$0x80
++	pushl	%ecx
++	ret
+diff -uprN src.orig/lib/libc/gen/Makefile.inc src/lib/libc/gen/Makefile.inc
+--- src.orig/lib/libc/gen/Makefile.inc	2009-02-08 19:09:01.000000000 +0100
++++ src/lib/libc/gen/Makefile.inc	2009-09-08 17:55:02.000000000 +0200
+@@ -16,7 +16,7 @@ SRCS+=  __getosreldate.c __xuname.c \
+ 	getcap.c getcwd.c getdomainname.c getgrent.c getgrouplist.c \
+ 	gethostname.c getloadavg.c getlogin.c getmntinfo.c getnetgrent.c \
+ 	getosreldate.c getpagesize.c \
+-	getpeereid.c getprogname.c getpwent.c getttyent.c \
++	getpeereid.c getprocinfo.c getprogname.c getpwent.c getttyent.c \
+ 	getusershell.c getvfsbyname.c glob.c \
+ 	initgroups.c isatty.c isinf.c isnan.c jrand48.c lcong48.c \
+ 	lockf.c lrand48.c mrand48.c nftw.c nice.c \
+@@ -25,7 +25,7 @@ SRCS+=  __getosreldate.c __xuname.c \
+ 	psignal.c pw_scan.c pwcache.c \
+ 	raise.c readdir.c readpassphrase.c rewinddir.c \
+ 	scandir.c seed48.c seekdir.c sem.c semctl.c \
+-	setdomainname.c sethostname.c setjmperr.c setmode.c \
++	setdomainname.c sethostname.c setjmperr.c setmode.c setprocinfo.c \
+ 	setproctitle.c setprogname.c siginterrupt.c siglist.c signal.c \
+ 	sigsetops.c sleep.c srand48.c statvfs.c stringlist.c strtofflags.c \
+ 	sysconf.c sysctl.c sysctlbyname.c sysctlnametomib.c \
+diff -uprN src.orig/lib/libc/gen/getprocinfo.c src/lib/libc/gen/getprocinfo.c
+--- src.orig/lib/libc/gen/getprocinfo.c	1970-01-01 01:00:00.000000000 +0100
++++ src/lib/libc/gen/getprocinfo.c	2009-10-07 16:18:07.000000000 +0200
+@@ -0,0 +1,73 @@
++#include <sys/types.h>
++#include <dlfcn.h>
++#include <stdio.h>
++
++#define	GETPROCINFO(func, name, type) do {				\
++	static type *data = NULL;					\
++	if (data == NULL) {						\
++		data = dlsym(RTLD_DEFAULT, (name));			\
++		if (data == NULL)					\
++			return (__CONCAT(__sys_,func));			\
++	}								\
++	return (*data);							\
++} while(0)
++
++extern pid_t	__sys_getpid(void);
++extern pid_t	__sys_getppid(void);
++extern pid_t	__sys_getpgrp(void);
++extern pid_t	__sys_getsid(pid_t);
++extern uid_t	__sys_getuid(void);
++extern uid_t	__sys_geteuid(void);
++extern gid_t	__sys_getgid(void);
++extern gid_t	__sys_getegid(void);
++
++pid_t
++getpid(void)
++{
++	GETPROCINFO(getpid(), "vpid", pid_t);
++}
++
++pid_t
++getppid(void)
++{
++	GETPROCINFO(getppid(), "vppid", pid_t);
++}
++
++pid_t
++getpgrp(void)
++{
++	GETPROCINFO(getpgrp(), "vpgrp", pid_t);
++}
++
++pid_t
++getsid(pid_t pid)
++{
++	if (pid == 0)
++		GETPROCINFO(getsid(pid), "vsid", pid_t);
++	else
++		return (__sys_getsid(pid));
++}
++
++uid_t
++getuid(void)
++{
++	GETPROCINFO(getuid(), "vuid", uid_t);
++}
++
++uid_t
++geteuid(void)
++{
++	GETPROCINFO(geteuid(), "veuid", uid_t);
++}
++
++gid_t
++getgid(void)
++{
++	GETPROCINFO(getgid(), "vgid", gid_t);
++}
++
++gid_t
++getegid(void)
++{
++	GETPROCINFO(getegid(), "vegid", gid_t);
++}
+diff -uprN src.orig/lib/libc/gen/setprocinfo.c src/lib/libc/gen/setprocinfo.c
+--- src.orig/lib/libc/gen/setprocinfo.c	1970-01-01 01:00:00.000000000 +0100
++++ src/lib/libc/gen/setprocinfo.c	2009-10-07 16:09:15.000000000 +0200
+@@ -0,0 +1,70 @@
++#include <sys/types.h>
++#include <dlfcn.h>
++#include <stdio.h>
++
++#define	SETPROCINFO(name, type, val) do {				\
++	static type *data = NULL;					\
++	if (data == NULL) {						\
++		data = dlsym(RTLD_DEFAULT, (name));			\
++		if (data == NULL) {					\
++			printf("%s\n", dlerror());			\
++			return (-1);					\
++		}							\
++	}								\
++	*data = (val);							\
++	return (0);							\
++} while(0)
++
++extern int	__sys_setpgid(pid_t, pid_t);
++extern int	__sys_setuid(uid_t);
++extern int	__sys_seteuid(uid_t);
++extern int	__sys_setgid(gid_t);
++extern int	__sys_setegid(gid_t);
++
++int
++setpgid(pid_t pid, pid_t pgrp)
++{
++	if (pid == 0)
++		if (__sys_setpgid(pid, pgrp) != -1)
++			SETPROCINFO("vgid", gid_t, pgrp);
++		else
++			return (-1);
++	else
++		return (__sys_setpgid(pid, pgrp));
++}
++
++int
++setuid(uid_t uid)
++{
++	if (__sys_setuid(uid) != -1)
++		SETPROCINFO("vuid", uid_t, uid);
++	else
++		return (-1);
++}
++
++int
++seteuid(uid_t euid)
++{
++	if (__sys_seteuid(euid) != -1)
++		SETPROCINFO("veuid", uid_t, euid);
++	else
++		return (-1);
++}
++
++int
++setgid(gid_t gid)
++{
++	if (__sys_setgid(gid) != -1)
++		SETPROCINFO("vgid", gid_t, gid);
++	else
++		return (-1);
++}
++
++int
++setegid(gid_t egid)
++{
++	if (__sys_setegid(egid) != -1)
++		SETPROCINFO("vegid", gid_t, egid);
++	else
++		return (-1);
++}
+diff -uprN src.orig/lib/libc/i386/SYS.h src/lib/libc/i386/SYS.h
+--- src.orig/lib/libc/i386/SYS.h	2009-02-08 19:09:02.000000000 +0100
++++ src/lib/libc/i386/SYS.h	2009-06-11 11:49:23.000000000 +0200
+@@ -55,4 +55,4 @@
+ /* gas messes up offset -- although we don't currently need it, do for BCS */
+ #define	LCALL(x,y)	.byte 0x9a ; .long y; .word x
+ 
+-#define KERNCALL	int $0x80
++#define KERNCALL	call *CNAME(sctramp_entry)
+diff -uprN src.orig/lib/libc/i386/sys/Ovfork.S src/lib/libc/i386/sys/Ovfork.S
+--- src.orig/lib/libc/i386/sys/Ovfork.S	2009-02-08 19:09:02.000000000 +0100
++++ src/lib/libc/i386/sys/Ovfork.S	2009-06-11 11:48:31.000000000 +0200
+@@ -45,7 +45,7 @@ __FBSDID("$FreeBSD: src/lib/libc/i386/sy
+ ENTRY(__sys_vfork)
+ 	popl	%ecx		/* my rta into ecx */
+ 	mov	$SYS_vfork,%eax
+-	KERNCALL
++	int	$0x80
+ 	jb	1f
+ 	jmp	*%ecx
+ 1:
+diff -uprN src.orig/lib/libc/i386/sys/getcontext.S src/lib/libc/i386/sys/getcontext.S
+--- src.orig/lib/libc/i386/sys/getcontext.S	2009-02-08 19:09:02.000000000 +0100
++++ src/lib/libc/i386/sys/getcontext.S	2009-06-11 11:48:46.000000000 +0200
+@@ -41,7 +41,7 @@ __FBSDID("$FreeBSD: src/lib/libc/i386/sy
+ ENTRY(__sys_getcontext)
+ 	movl	(%esp),%ecx	/* save getcontext return address */
+ 	mov	$SYS_getcontext,%eax
+-	KERNCALL
++	int	$0x80
+ 	jb	1f
+ 	addl	$4,%esp		/* remove stale (setcontext) return address */
+ 	jmp	*%ecx		/* restore return address */
+diff -uprN src.orig/lib/libc/i386/sys/sbrk.S src/lib/libc/i386/sys/sbrk.S
+--- src.orig/lib/libc/i386/sys/sbrk.S	2009-02-08 19:09:02.000000000 +0100
++++ src/lib/libc/i386/sys/sbrk.S	2009-06-11 11:49:05.000000000 +0200
+@@ -58,7 +58,7 @@ ENTRY(sbrk)
+ 	jz	back
+ 	addl	%eax,4(%esp)
+ 	mov	$SYS_break,%eax
+-	KERNCALL
++	int	$0x80
+ 	jb	err
+ 	PIC_PROLOGUE
+ 	movl	PIC_GOT(HIDENAME(curbrk)),%edx
+@@ -79,7 +79,7 @@ err:
+ 	jz	back
+ 	addl	%eax,4(%esp)
+ 	mov	$SYS_break,%eax
+-	KERNCALL
++	int	$0x80
+ 	jb	err
+ 	movl	HIDENAME(curbrk),%eax
+ 	addl	%ecx,HIDENAME(curbrk)
+diff -uprN src.orig/lib/libc/i386/sys/syscall.S src/lib/libc/i386/sys/syscall.S
+--- src.orig/lib/libc/i386/sys/syscall.S	2009-02-08 19:09:02.000000000 +0100
++++ src/lib/libc/i386/sys/syscall.S	2009-06-11 11:47:52.000000000 +0200
+@@ -43,7 +43,7 @@ ENTRY(syscall)
+ 	pop	%eax	/* syscall number */
+ 	push	%ecx
+ 	KERNCALL
+-	push	%ecx	/* need to push a word to keep stack frame intact
++	pushl	(%esp)	/* need to push a word to keep stack frame intact
+ 			   upon return; the word must be the return address. */
+ 	jb	1f
+ 	ret
+diff -uprN src.orig/libexec/rtld-elf/i386/Makefile.inc src/libexec/rtld-elf/i386/Makefile.inc
+--- src.orig/libexec/rtld-elf/i386/Makefile.inc	2009-02-08 19:09:36.000000000 +0100
++++ src/libexec/rtld-elf/i386/Makefile.inc	2009-08-06 16:38:40.000000000 +0200
+@@ -1,5 +1,9 @@
++.BEGIN:
++	@echo 'sctramp_entry = ABSOLUTE('`sysctl -a | grep kern.usrstack | cut -f 2 -d" "` - `sysctl -a kern.sgrowsiz | cut -f 2 -d" "`');'>${.CURDIR}/${MACHINE_ARCH}/sctramp.x
++.END:
++	@rm -f ${.CURDIR}/${MACHINE_ARCH}/sctramp.x
+ CFLAGS+=	-elf
+-LDFLAGS+=	-elf
++LDFLAGS+=	-elf ${.CURDIR}/${MACHINE_ARCH}/sctramp.x
+ # Uncomment this to build the dynamic linker as an executable instead
+ # of a shared library:
+ #LDSCRIPT=	${.CURDIR}/${MACHINE_ARCH}/elf_rtld.x
+diff -uprN src.orig/libexec/rtld-elf/i386/reloc.c src/libexec/rtld-elf/i386/reloc.c
+--- src.orig/libexec/rtld-elf/i386/reloc.c	2009-02-08 19:09:36.000000000 +0100
++++ src/libexec/rtld-elf/i386/reloc.c	2009-08-06 16:38:40.000000000 +0200
+@@ -49,6 +49,8 @@
+ #include "debug.h"
+ #include "rtld.h"
+ 
++extern unsigned long sctramp_entry;
++
+ /*
+  * Process the special R_386_COPY relocations in the main program.  These
+  * copy data from a shared object into a region in the main program's BSS
+@@ -203,6 +205,12 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry 
+ 		break;
+ 
+ 	    case R_386_RELATIVE:
++		/*
++		 * Avoid relocation if we are dealing with the absolute
++		 * sctramp_entry symbol of the dynamic linker.
++		 */
++		if ((*where == (Elf_Addr) &sctramp_entry) && (obj->rtld))
++			break;
+ 		*where += (Elf_Addr) obj->relocbase;
+ 		break;
+ 
+diff -uprN src.orig/libexec/rtld-elf/i386/rtld_start.S src/libexec/rtld-elf/i386/rtld_start.S
+--- src.orig/libexec/rtld-elf/i386/rtld_start.S	2009-02-08 19:09:36.000000000 +0100
++++ src/libexec/rtld-elf/i386/rtld_start.S	2009-10-04 15:47:44.000000000 +0200
+@@ -25,6 +25,19 @@
+  * $FreeBSD: src/libexec/rtld-elf/i386/rtld_start.S,v 1.4 2005/05/19 07:32:42 dfr Exp $
+  */
+ 
++	.data
++	.align	4
++/*
++ * rtld is not built with crt1.o, so we need to provide a rtld specific
++ * syscall trampoline, whose entry point symbol has to be necessarily
++ * absolute (its address is the top of the user stack), because rtld accesses
++ * the trampoline very early, even before it has been relocated.
++ */
++	.weak	sctramp_entry
++	.type	sctramp_entry, @object
++sctramp_entry:
++	.long	0
++
+ 	.text
+ 	.align	4
+ 	.globl	.rtld_start
+@@ -39,6 +52,8 @@
+ 	movl	%esp,%ecx		# construct address of obj_main
+ 	addl	$4,%ecx
+ 	subl	$4,%esp			# Keep stack aligned
++	jmp	.sctf			# Get the rtld syscall trampoline
++.sctb:	popl	sctramp_entry		# using the old good jmp/call trick
+ 	pushl	%ecx			# Pass address of obj_main
+ 	pushl	%ebx			# Pass address of exit proc
+ 	pushl	%eax			# Pass initial stack pointer to rtld
+@@ -89,3 +104,14 @@ _rtld_bind_start:
+ 	popf				# Restore eflags
+ 	leal	4(%esp),%esp		# Discard reloff, do not change eflags
+ 	ret				# "Return" to target address
++
++/* Use the old int $0x80 instruction for rtld's syscall trampoline. */
++	.align	4, 0x90
++	.weak	sctramp_rtld
++	.type	sctramp_rtld, @function
++.sctf:	call	.sctb
++sctramp_rtld:
++	popl	%ecx
++	int	$0x80
++	pushl	%ecx
++	ret
+diff -uprN src.orig/libexec/rtld-elf/map_object.c src/libexec/rtld-elf/map_object.c
+--- src.orig/libexec/rtld-elf/map_object.c	2009-02-08 19:09:36.000000000 +0100
++++ src/libexec/rtld-elf/map_object.c	2009-10-04 15:47:07.000000000 +0200
+@@ -38,7 +38,7 @@
+ #include "debug.h"
+ #include "rtld.h"
+ 
+-static Elf_Ehdr *get_elf_header (int, const char *);
++static Elf_Ehdr *get_elf_header (int, const char *, caddr_t);
+ static int convert_prot(int);	/* Elf flags -> mmap protection */
+ static int convert_flags(int); /* Elf flags -> mmap flags */
+ 
+@@ -46,12 +46,14 @@ static int convert_flags(int); /* Elf fl
+  * Map a shared object into memory.  The "fd" argument is a file descriptor,
+  * which must be open on the object and positioned at its beginning.
+  * The "path" argument is a pathname that is used only for error messages.
++ * The "vdso_va" argument is the address of a virtual dynamic shared object,
++ * if any, and should be NULL in all the other cases.
+  *
+  * The return value is a pointer to a newly-allocated Obj_Entry structure
+  * for the shared object.  Returns NULL on failure.
+  */
+ Obj_Entry *
+-map_object(int fd, const char *path, const struct stat *sb)
++map_object(int fd, const char *path, const struct stat *sb, caddr_t vdso_va)
+ {
+     Obj_Entry *obj;
+     Elf_Ehdr *hdr;
+@@ -84,7 +86,7 @@ map_object(int fd, const char *path, con
+     Elf_Addr bss_vlimit;
+     caddr_t bss_addr;
+ 
+-    hdr = get_elf_header(fd, path);
++    hdr = get_elf_header(fd, path, vdso_va);
+     if (hdr == NULL)
+ 	return (NULL);
+ 
+@@ -153,6 +155,14 @@ map_object(int fd, const char *path, con
+     mapsize = base_vlimit - base_vaddr;
+     base_addr = hdr->e_type == ET_EXEC ? (caddr_t) base_vaddr : NULL;
+ 
++    /*
++     * The object is a vdso, thus it is already mapped in memory.
++     * Just create the proper Obj_Entry.
++     */ 
++    if (vdso_va != NULL) {
++	mapbase = vdso_va;
++	goto mapped;
++    }
+     mapbase = mmap(base_addr, mapsize, convert_prot(segs[0]->p_flags),
+       convert_flags(segs[0]->p_flags), fd, base_offset);
+     if (mapbase == (caddr_t) -1) {
+@@ -221,8 +231,9 @@ map_object(int fd, const char *path, con
+ 	}
+     }
+ 
++mapped:
+     obj = obj_new();
+-    if (sb != NULL) {
++    if ((sb != NULL) && (vdso_va == NULL)) {
+ 	obj->dev = sb->st_dev;
+ 	obj->ino = sb->st_ino;
+     }
+@@ -258,11 +269,12 @@ map_object(int fd, const char *path, con
+ 	obj->tlsinitsize = phtls->p_filesz;
+ 	obj->tlsinit = mapbase + phtls->p_vaddr;
+     }
++
+     return obj;
+ }
+ 
+ static Elf_Ehdr *
+-get_elf_header (int fd, const char *path)
++get_elf_header (int fd, const char *path, caddr_t vdso_va)
+ {
+     static union {
+ 	Elf_Ehdr hdr;
+@@ -270,7 +282,9 @@ get_elf_header (int fd, const char *path
+     } u;
+     ssize_t nbytes;
+ 
+-    if ((nbytes = read(fd, u.buf, PAGE_SIZE)) == -1) {
++    if (vdso_va != NULL)
++	memcpy(u.buf, vdso_va, nbytes = PAGE_SIZE);
++    else if ((nbytes = read(fd, u.buf, PAGE_SIZE)) == -1) {
+ 	_rtld_error("%s: read error: %s", path, strerror(errno));
+ 	return NULL;
+     }
+diff -uprN src.orig/libexec/rtld-elf/rtld.c src/libexec/rtld-elf/rtld.c
+--- src.orig/libexec/rtld-elf/rtld.c	2009-02-08 19:09:36.000000000 +0100
++++ src/libexec/rtld-elf/rtld.c	2009-10-07 16:31:43.000000000 +0200
+@@ -103,9 +103,11 @@ static bool is_exported(const Elf_Sym *)
+ static void linkmap_add(Obj_Entry *);
+ static void linkmap_delete(Obj_Entry *);
+ static int load_needed_objects(Obj_Entry *);
++static Obj_Entry **load_needed_vdso(int *, caddr_t, int);
+ static int load_preload_objects(void);
+ static Obj_Entry *load_object(const char *, const Obj_Entry *);
+ static Obj_Entry *obj_from_addr(const void *);
++static Obj_Entry *obj_from_vdso(caddr_t);
+ static void objlist_call_fini(Objlist *, int *lockstate);
+ static void objlist_call_init(Objlist *, int *lockstate);
+ static void objlist_clear(Objlist *);
+@@ -313,8 +315,10 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_
+     Objlist_Entry *entry;
+     Obj_Entry *obj;
+     Obj_Entry **preload_tail;
++    Obj_Entry **vdso_obj;
+     Objlist initlist;
+     int lockstate;
++    int vdsonum = 0;
+ 
+     /*
+      * On entry, the dynamic linker itself has not been relocated yet.
+@@ -388,7 +392,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_
+     if (aux_info[AT_EXECFD] != NULL) {	/* Load the main program. */
+ 	int fd = aux_info[AT_EXECFD]->a_un.a_val;
+ 	dbg("loading main program");
+-	obj_main = map_object(fd, argv0, NULL);
++	obj_main = map_object(fd, argv0, NULL, NULL);
+ 	close(fd);
+ 	if (obj_main == NULL)
+ 	    die();
+@@ -455,6 +459,15 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_
+     if (load_needed_objects(obj_main) == -1)
+ 	die();
+ 
++    /* Load virtual dynamic shared objects, if any. */
++    vdso_obj = NULL;
++    if (aux_info[AT_META_NUM] != NULL && aux_info[AT_META_SPAGE] != NULL) {
++	caddr_t metaspage = aux_info[AT_META_SPAGE]->a_un.a_ptr;
++	int metanum = aux_info[AT_META_NUM]->a_un.a_val;
++	dbg("loading needed virtual dynamic shared objects");
++	vdso_obj = load_needed_vdso(&vdsonum, metaspage, metanum);
++    }
++
+     /* Make a list of all objects loaded at startup. */
+     for (obj = obj_list;  obj != NULL;  obj = obj->next) {
+ 	objlist_push_tail(&list_main, obj);
+@@ -745,7 +758,16 @@ digest_dynamic(Obj_Entry *obj, int early
+ 	    break;
+ 
+ 	case DT_TEXTREL:
+-	    obj->textrel = true;
++	    /*
++	     * The sctramp_entry symbol of the rtld adds a DT_TEXTREL
++	     * tag in the dynamic section that would trigger the assert
++	     * in relocate_objects; hence avoid this by setting the
++	     * 'textrel' field of the rtld to false. 
++	     */
++	    if (!obj->rtld)
++		obj->textrel = true;
++	    else
++		obj->textrel = false;
+ 	    break;
+ 
+ 	case DT_SYMBOLIC:
+@@ -1310,6 +1332,54 @@ load_needed_objects(Obj_Entry *first)
+     return 0;
+ }
+ 
++/*
++ * Retrieve information from the meta shared page, whose address
++ * is passed by means of AT_META_SPAGE auxiliary entry.
++ * The meta shared page contains informations on other shared pages
++ * mapped in the process address space: there are four fields per
++ * page that represent address, size, type and vdso flag of the
++ * shared page, respectively.
++ */
++static Obj_Entry **
++load_needed_vdso(int *vdsonum, caddr_t metaspage, int metanum)
++{
++    Obj_Entry **tmp, **vdso_obj, **vo_addr;
++    struct spage spage = { 0 };
++    int i;
++
++    tmp = malloc(sizeof(Obj_Entry) * metanum);
++    if (tmp == NULL)
++	return (NULL);
++
++    for (i = 0; i < metanum; i++) {
++        memcpy(&spage, metaspage, sizeof(struct spage));
++        if (spage.vdso) {
++            (*vdsonum)++;
++            tmp[i] = obj_from_vdso((caddr_t) spage.addr);
++	    if (tmp[i] == NULL)
++		return (NULL);
++        } else
++	    tmp[i] = NULL;
++        metaspage += sizeof(struct spage);
++    }
++
++    vdso_obj = malloc(sizeof(Obj_Entry) * *vdsonum);
++    if (vdso_obj == NULL)
++	return (NULL);
++
++    vo_addr = vdso_obj;
++    for (i = 0; i < metanum; i++)
++        if (tmp[i] != NULL) {
++	    *vdso_obj = tmp[i];
++            vdso_obj++;
++        }
++
++    free(tmp);
++    vdso_obj = vo_addr;
++
++    return (vdso_obj);
++}
++
+ static int
+ load_preload_objects(void)
+ {
+@@ -1420,7 +1490,7 @@ do_load_object(int fd, const char *name,
+ 	}
+     }
+     dbg("loading \"%s\"", path);
+-    obj = map_object(fd, path, sbp);
++    obj = map_object(fd, path, sbp, NULL);
+     if (obj == NULL)
+         return NULL;
+ 
+@@ -1439,7 +1509,40 @@ do_load_object(int fd, const char *name,
+     if (obj->textrel)
+ 	dbg("  WARNING: %s has impure text", obj->path);
+     LD_UTRACE(UTRACE_LOAD_OBJECT, obj, obj->mapbase, obj->mapsize, 0,
+-	obj->path);    
++	obj->path);
++
++    return obj;
++}
++
++static Obj_Entry *
++obj_from_vdso(caddr_t vdso_va)
++{
++    Obj_Entry *obj;
++
++    obj = map_object(0, NULL, NULL, vdso_va);
++    if (obj == NULL)
++	return (NULL);
++
++    /*
++     * Set virtual shared objects' path to the main object's:
++     * programs willing to access vdso's symbols by means of dlsym
++     * can call it supplying RTLD_DEFAULT for the "handle" argument.
++     */ 
++    obj->path = obj_main->path;
++
++    digest_dynamic(obj, 0);
++    *obj_tail = obj;
++    obj_tail = &obj->next;
++    obj_count++;
++    obj_loads++;
++    linkmap_add(obj);	/* for GDB & dlinfo() */
++
++    dbg("  %p .. %p: %s", obj->mapbase,
++	obj->mapbase + obj->mapsize - 1, obj->path);
++    if (obj->textrel)
++	dbg("  WARNING: %s has impure text", obj->path);
++    LD_UTRACE(UTRACE_LOAD_OBJECT, obj, obj->mapbase, obj->mapsize, 0,
++	obj->path);
+ 
+     return obj;
+ }
+diff -uprN src.orig/libexec/rtld-elf/rtld.h src/libexec/rtld-elf/rtld.h
+--- src.orig/libexec/rtld-elf/rtld.h	2009-02-08 19:09:36.000000000 +0100
++++ src/libexec/rtld-elf/rtld.h	2009-10-04 15:42:42.000000000 +0200
+@@ -244,8 +244,26 @@ typedef struct Struct_SymCache {
+     const Obj_Entry *obj;	/* Shared object which defines it */
+ } SymCache;
+ 
++/*
++ * Shared page types.
++ */
++#define	SPAGE_META	0
++#define	SPAGE_GENERIC	1
++#define	SPAGE_SCTRAMP	2
++
++/*
++ * Shared page descriptor: it differs from the kernel-specific definition
++ * in that it has not any list-related stuff here, because we don't need it.
++ */
++struct spage {
++	vm_offset_t	addr;
++	size_t		size;
++	u_int		type;
++	bool		vdso;
++};
++
+ extern void _rtld_error(const char *, ...) __printflike(1, 2);
+-extern Obj_Entry *map_object(int, const char *, const struct stat *);
++extern Obj_Entry *map_object(int, const char *, const struct stat *, caddr_t);
+ extern void *xcalloc(size_t);
+ extern void *xmalloc(size_t);
+ extern char *xstrdup(const char *);
+diff -uprN src.orig/sys/conf/files src/sys/conf/files
+--- src.orig/sys/conf/files	2009-02-08 19:04:32.000000000 +0100
++++ src/sys/conf/files	2009-09-12 19:45:31.000000000 +0200
+@@ -1683,6 +1683,15 @@ kern/uipc_sockbuf.c		standard
+ kern/uipc_socket.c		standard
+ kern/uipc_syscalls.c		standard
+ kern/uipc_usrreq.c		standard
++kern/vdso_common.c		standard
++#
++vdso_generic.so			standard				\
++	dependency	"$S/kern/vdso_generic.s"			\
++	compile-with	"${CC} -x assembler-with-cpp -Wl,-T,$S/kern/vdso_generic.ldscript,-soname=vdso_generic.so -shared -s -nostdlib -o ${.TARGET} $S/kern/vdso_generic.s"								\
++	no-implicit-rule						\
++	clean		"vdso_generic.so"
++#
++kern/vdso_generic_syms.s	standard
+ kern/vfs_acl.c			standard
+ kern/vfs_aio.c			optional vfs_aio
+ kern/vfs_bio.c			standard
+diff -uprN src.orig/sys/conf/files.i386 src/sys/conf/files.i386
+--- src.orig/sys/conf/files.i386	2009-02-08 19:04:32.000000000 +0100
++++ src/sys/conf/files.i386	2009-09-12 19:45:31.000000000 +0200
+@@ -304,6 +304,20 @@ i386/i386/sys_machdep.c		standard
+ i386/i386/trap.c		standard
+ i386/i386/tsc.c			standard
+ i386/i386/uio_machdep.c		standard
++#
++vdso_sctramp_int0x80.so		standard				\
++	dependency	"$S/i386/i386/vdso_sctramp_int0x80.s"		\
++	compile-with	"${CC} -x assembler-with-cpp -Wl,-T,$S/i386/i386/vdso_sctramp.ldscript,-soname=vdso_sctramp.so -shared -s -nostdlib -o ${.TARGET} $S/i386/i386/vdso_sctramp_int0x80.s"						\
++	no-implicit-rule						\
++	clean		"vdso_sctramp_int0x80.so"
++#
++vdso_sctramp_sysenter.so	standard				\
++	dependency	"$S/i386/i386/vdso_sctramp_sysenter.s"		\
++	compile-with	"${CC} -x assembler-with-cpp -Wl,-T,$S/i386/i386/vdso_sctramp.ldscript,-soname=vdso_sctramp.so -shared -s -nostdlib -o ${.TARGET} $S/i386/i386/vdso_sctramp_sysenter.s"						\
++	no-implicit-rule						\
++	clean		"vdso_sctramp_sysenter.so"
++#
++i386/i386/vdso_sctramp_syms.s	standard
+ i386/i386/vm86.c		standard
+ i386/i386/vm_machdep.c		standard
+ i386/ibcs2/ibcs2_errno.c	optional ibcs2
+diff -uprN src.orig/sys/i386/i386/machdep.c src/sys/i386/i386/machdep.c
+--- src.orig/sys/i386/i386/machdep.c	2009-02-08 19:05:45.000000000 +0100
++++ src/sys/i386/i386/machdep.c	2009-09-13 19:41:01.000000000 +0200
+@@ -85,6 +85,7 @@ __FBSDID("$FreeBSD: src/sys/i386/i386/ma
+ #include <sys/sysent.h>
+ #include <sys/sysproto.h>
+ #include <sys/ucontext.h>
++#include <sys/vdso.h>
+ #include <sys/vmmeter.h>
+ 
+ #include <vm/vm.h>
+@@ -186,6 +187,7 @@ static int  set_fpcontext(struct thread 
+ static void set_fpregs_xmm(struct save87 *, struct savexmm *);
+ static void fill_fpregs_xmm(struct savexmm *, struct save87 *);
+ #endif /* CPU_ENABLE_SSE */
++static void syscall_trampoline_init(void);
+ SYSINIT(cpu, SI_SUB_CPU, SI_ORDER_FIRST, cpu_startup, NULL);
+ 
+ #ifdef DDB
+@@ -239,6 +241,9 @@ struct mtx icu_lock;
+ 
+ struct mem_range_softc mem_range_softc;
+ 
++caddr_t vdso_sctramp_start;
++size_t	vdso_sctramp_size;
++
+ static void
+ cpu_startup(dummy)
+ 	void *dummy;
+@@ -309,6 +314,7 @@ cpu_startup(dummy)
+ #ifndef XEN
+ 	cpu_setregs();
+ #endif
++	syscall_trampoline_init();
+ }
+ 
+ /*
+@@ -1373,6 +1379,8 @@ exec_setregs(td, entry, stack, ps_string
+ {
+ 	struct trapframe *regs = td->td_frame;
+ 	struct pcb *pcb = td->td_pcb;
++	struct proc *p = td->td_proc;
++	struct spage *spage;
+ 
+ 	/* Reset pc->pcb_gs and %gs before possibly invalidating it. */
+ 	pcb->pcb_gs = _udatasel;
+@@ -1440,6 +1448,12 @@ exec_setregs(td, entry, stack, ps_string
+ 	 * on it.
+ 	 */
+ 	td->td_retval[1] = 0;
++
++	/* Set the syscall trampoline. */
++	spage = vm_spage_alloc(p, PAGE_SIZE, SPAGE_SCTRAMP, TRUE);
++	if (vdso_setup(0, NULL, vdso_sctramp_start, vdso_sctramp_size, p,
++	    (caddr_t) spage->addr) != 0)
++		panic("exec_setregs: unable to set vdso up");
+ }
+ 
+ void
+@@ -1470,6 +1484,20 @@ cpu_setregs(void)
+ 	load_gs(_udatasel);
+ }
+ 
++static void
++syscall_trampoline_init(void)
++{
++	if (cpu_feature & CPUID_SEP) {
++		/* at the moment do the same as int0x80 does */
++		vdso_sctramp_start = &sctramp_int0x80_start;
++		vdso_sctramp_size = sctramp_int0x80_size; 
++	} else {
++		vdso_sctramp_start = &sctramp_int0x80_start;
++		vdso_sctramp_size = sctramp_int0x80_size; 
++	}
++
++}
++
+ u_long bootdev;		/* not a struct cdev *- encoding is different */
+ SYSCTL_ULONG(_machdep, OID_AUTO, guessed_bootdev,
+ 	CTLFLAG_RD, &bootdev, 0, "Maybe the Boot device (not in struct cdev *format)");
+diff -uprN src.orig/sys/i386/i386/vdso_sctramp.ldscript src/sys/i386/i386/vdso_sctramp.ldscript
+--- src.orig/sys/i386/i386/vdso_sctramp.ldscript	1970-01-01 01:00:00.000000000 +0100
++++ src/sys/i386/i386/vdso_sctramp.ldscript	2009-10-05 19:40:31.000000000 +0200
+@@ -0,0 +1,25 @@
++SECTIONS
++{
++	. = +SIZEOF_HEADERS;
++	.hash		: { *(.hash) }			:text
++	.gnu.hash	: { *(.gnu.hash) }
++	.dynsym		: { *(.dynsym) }
++	.dynstr		: { *(.dynstr) }
++	.gnu.version	: { *(.gnu.version) }
++	.gnu.version_d	: { *(.gnu.version_d) }
++	.gnu.version_r	: { *(.gnu.version_r) }
++	.text		: { *(.text) }			:text = 0x90909090
++	.dynamic	: { *(.dynamic) }		:text :dynamic	
++	.trash		: {
++		*(.got.plt) *(.got) *(.data .data.* .gnu.linkonce.d.*)
++		*(.dynbss .bss .bss.* .gnu.linkonce.b.*)
++	}						:text
++}
++
++PHDRS
++{
++	text PT_LOAD;
++	dynamic PT_DYNAMIC;
++}
++
++ENTRY(vsctramp_entry)
+diff -uprN src.orig/sys/i386/i386/vdso_sctramp_int0x80.s src/sys/i386/i386/vdso_sctramp_int0x80.s
+--- src.orig/sys/i386/i386/vdso_sctramp_int0x80.s	1970-01-01 01:00:00.000000000 +0100
++++ src/sys/i386/i386/vdso_sctramp_int0x80.s	2009-10-05 19:40:45.000000000 +0200
+@@ -0,0 +1,8 @@
++#include <machine/asmacros.h>
++
++	.text
++ENTRY(vsctramp_entry)
++	popl	%ecx		/* rta */
++	int	$0x80
++	pushl	%ecx		/* reset rta */
++	ret
+diff -uprN src.orig/sys/i386/i386/vdso_sctramp_syms.s src/sys/i386/i386/vdso_sctramp_syms.s
+--- src.orig/sys/i386/i386/vdso_sctramp_syms.s	1970-01-01 01:00:00.000000000 +0100
++++ src/sys/i386/i386/vdso_sctramp_syms.s	2009-09-13 18:46:12.000000000 +0200
+@@ -0,0 +1,19 @@
++#include <machine/asmacros.h>
++
++	.data
++	ALIGN_DATA
++	.globl	sctramp_int0x80_start, sctramp_int0x80_end
++sctramp_int0x80_start:
++	.incbin	"vdso_sctramp_int0x80.so"
++sctramp_int0x80_end:
++
++	.globl	sctramp_sysenter_start, sctramp_sysenter_end
++sctramp_sysenter_start:
++	.incbin	"vdso_sctramp_sysenter.so"
++sctramp_sysenter_end:
++
++	.globl	sctramp_int0x80_size, sctramp_sysenter_size
++sctramp_int0x80_size:
++	.int	sctramp_int0x80_end - sctramp_int0x80_start
++sctramp_sysenter_size:
++	.int	sctramp_sysenter_end - sctramp_sysenter_start
+diff -uprN src.orig/sys/i386/i386/vdso_sctramp_sysenter.s src/sys/i386/i386/vdso_sctramp_sysenter.s
+--- src.orig/sys/i386/i386/vdso_sctramp_sysenter.s	1970-01-01 01:00:00.000000000 +0100
++++ src/sys/i386/i386/vdso_sctramp_sysenter.s	2009-10-05 19:40:55.000000000 +0200
+@@ -0,0 +1,5 @@
++#include <machine/asmacros.h>
++
++	.text
++ENTRY(vsctramp_entry)
++	sysenter
+diff -uprN src.orig/sys/i386/i386/vm_machdep.c src/sys/i386/i386/vm_machdep.c
+--- src.orig/sys/i386/i386/vm_machdep.c	2009-02-08 19:05:45.000000000 +0100
++++ src/sys/i386/i386/vm_machdep.c	2009-09-13 19:00:40.000000000 +0200
+@@ -66,6 +66,7 @@ __FBSDID("$FreeBSD: src/sys/i386/i386/vm
+ #include <sys/sched.h>
+ #include <sys/sysctl.h>
+ #include <sys/unistd.h>
++#include <sys/vdso.h>
+ #include <sys/vnode.h>
+ #include <sys/vmmeter.h>
+ 
+@@ -149,6 +150,7 @@ cpu_fork(td1, p2, td2, flags)
+ 	register struct proc *p1;
+ 	struct pcb *pcb2;
+ 	struct mdproc *mdp2;
++	struct spage *spage;
+ #ifdef DEV_NPX
+ 	register_t savecrit;
+ #endif
+@@ -275,6 +277,18 @@ cpu_fork(td1, p2, td2, flags)
+ #else	
+ 	td2->td_md.md_saved_flags = PSL_KERNEL | PSL_I;
+ #endif
++
++	/*
++	 * Allocate a shared page for the syscall trampoline,
++	 * or inherit it from the parent process.
++	 */
++	if (vm_spage_copy(p1, p2, SPAGE_SCTRAMP) != KERN_SUCCESS) {
++		spage = vm_spage_alloc(p2, PAGE_SIZE, SPAGE_SCTRAMP, TRUE);
++		if (vdso_setup(0, NULL, vdso_sctramp_start, vdso_sctramp_size,
++		    p2, (caddr_t) spage->addr) != 0)
++			panic("cpu_fork: unable to set vdso up");
++	}
++
+ 	/*
+ 	 * Now, cpu_switch() can schedule the new process.
+ 	 * pcb_esp is loaded pointing to the cpu_switch() stack frame
+diff -uprN src.orig/sys/i386/include/elf.h src/sys/i386/include/elf.h
+--- src.orig/sys/i386/include/elf.h	2009-02-08 19:05:46.000000000 +0100
++++ src/sys/i386/include/elf.h	2009-09-22 17:54:03.000000000 +0200
+@@ -105,7 +105,13 @@ __ElfType(Auxinfo);
+ #define	AT_GID		13	/* Real gid. */
+ #define	AT_EGID		14	/* Effective gid. */
+ 
+-#define	AT_COUNT	15	/* Count of defined aux entry types. */
++/*
++ * Used to manage spage-specific content within the interpreter.
++ */ 
++#define	AT_META_NUM	15	/* Number of shared pages in address space. */
++#define	AT_META_SPAGE	16	/* Address of the meta shared page. */
++
++#define	AT_COUNT	17	/* Count of defined aux entry types. */
+ 
+ /*
+  * Relocation types.
+diff -uprN src.orig/sys/i386/include/md_var.h src/sys/i386/include/md_var.h
+--- src.orig/sys/i386/include/md_var.h	2009-02-08 19:05:47.000000000 +0100
++++ src/sys/i386/include/md_var.h	2009-09-22 17:34:42.000000000 +0200
+@@ -70,6 +70,10 @@ extern	int	szosigcode;
+ #endif
+ extern	uint32_t *vm_page_dump;
+ extern	int	vm_page_dump_size;
++extern	size_t	sctramp_int0x80_size, sctramp_sysenter_size;
++extern	char	sctramp_int0x80_start, sctramp_sysenter_start;
++extern	caddr_t	vdso_sctramp_start;
++extern	size_t	vdso_sctramp_size;
+ 
+ typedef void alias_for_inthand_t(u_int cs, u_int ef, u_int esp, u_int ss);
+ struct	thread;
+diff -uprN src.orig/sys/kern/imgact_elf.c src/sys/kern/imgact_elf.c
+--- src.orig/sys/kern/imgact_elf.c	2009-02-08 19:05:50.000000000 +0100
++++ src/sys/kern/imgact_elf.c	2009-09-13 16:33:31.000000000 +0200
+@@ -889,6 +889,7 @@ __elfN(freebsd_fixup)(register_t **stack
+ 	Elf_Auxargs *args = (Elf_Auxargs *)imgp->auxargs;
+ 	Elf_Addr *base;
+ 	Elf_Addr *pos;
++	struct spage *spage;
+ 
+ 	base = (Elf_Addr *)*stack_base;
+ 	pos = base + (imgp->args->argc + imgp->args->envc + 2);
+@@ -906,6 +907,20 @@ __elfN(freebsd_fixup)(register_t **stack
+ 	AUXARGS_ENTRY(pos, AT_FLAGS, args->flags);
+ 	AUXARGS_ENTRY(pos, AT_ENTRY, args->entry);
+ 	AUXARGS_ENTRY(pos, AT_BASE, args->base);
++
++	/*
++	 * Set auxiliary entries related to the process's shared pages.
++	 */
++	if (imgp->proc->p_numspages > 0) {
++		AUXARGS_ENTRY(pos, AT_META_NUM, imgp->proc->p_numspages);
++
++		/* Meta shared page is the first entry of the list. */
++		spage = STAILQ_FIRST(&imgp->proc->p_spages);
++		if (spage == NULL || spage->type != SPAGE_META)
++			panic("no metaspage found");
++		AUXARGS_ENTRY(pos, AT_META_SPAGE, spage->addr);
++	}
++
+ 	AUXARGS_ENTRY(pos, AT_NULL, 0);
+ 
+ 	free(imgp->auxargs, M_TEMP);
+diff -uprN src.orig/sys/kern/kern_exec.c src/sys/kern/kern_exec.c
+--- src.orig/sys/kern/kern_exec.c	2009-02-08 19:05:51.000000000 +0100
++++ src/sys/kern/kern_exec.c	2009-09-13 18:56:12.000000000 +0200
+@@ -27,6 +27,8 @@
+ #include <sys/cdefs.h>
+ __FBSDID("$FreeBSD: src/sys/kern/kern_exec.c,v 1.324 2008/08/28 15:23:18 attilio Exp $");
+ 
++#define	VDSO_GENERIC_SYMV
++
+ #include "opt_hwpmc_hooks.h"
+ #include "opt_kdtrace.h"
+ #include "opt_ktrace.h"
+@@ -61,6 +63,7 @@ __FBSDID("$FreeBSD: src/sys/kern/kern_ex
+ #include <sys/sysent.h>
+ #include <sys/shm.h>
+ #include <sys/sysctl.h>
++#include <sys/vdso.h>
+ #include <sys/vnode.h>
+ #ifdef KTRACE
+ #include <sys/ktrace.h>
+@@ -101,6 +104,7 @@ SDT_PROBE_ARGTYPE(proc, kernel, , exec_s
+ MALLOC_DEFINE(M_PARGS, "proc-args", "Process arguments");
+ 
+ static int sysctl_kern_ps_strings(SYSCTL_HANDLER_ARGS);
++static int sysctl_kern_metaspage(SYSCTL_HANDLER_ARGS);
+ static int sysctl_kern_usrstack(SYSCTL_HANDLER_ARGS);
+ static int sysctl_kern_stackprot(SYSCTL_HANDLER_ARGS);
+ static int do_execve(struct thread *td, struct image_args *args,
+@@ -111,6 +115,9 @@ static void exec_free_args(struct image_
+ SYSCTL_PROC(_kern, KERN_PS_STRINGS, ps_strings, CTLTYPE_ULONG|CTLFLAG_RD,
+     NULL, 0, sysctl_kern_ps_strings, "LU", "");
+ 
++SYSCTL_PROC(_kern, OID_AUTO, metaspage, CTLTYPE_ULONG|CTLFLAG_RD,
++    NULL, 0, sysctl_kern_metaspage, "LU", "");
++
+ /* XXX This should be vm_size_t. */
+ SYSCTL_PROC(_kern, KERN_USRSTACK, usrstack, CTLTYPE_ULONG|CTLFLAG_RD,
+     NULL, 0, sysctl_kern_usrstack, "LU", "");
+@@ -142,6 +149,30 @@ sysctl_kern_ps_strings(SYSCTL_HANDLER_AR
+ }
+ 
+ static int
++sysctl_kern_metaspage(SYSCTL_HANDLER_ARGS)
++{
++	struct proc *p = curproc;
++	struct spage *metaspage;
++	int error;
++
++	if (STAILQ_EMPTY(&p->p_spages))
++		return (-1);
++	metaspage = STAILQ_FIRST(&p->p_spages);
++
++#ifdef SCTL_MASK32
++	if (req->flags & SCTL_MASK32) {
++		unsigned int val;
++		val = (unsigned int) metaspage->addr;
++		error = SYSCTL_OUT(req, &val, sizeof(val));
++	} else
++#endif
++		error = SYSCTL_OUT(req, &metaspage->addr,
++		    sizeof(metaspage->addr));
++		
++	return (error);
++}
++
++static int
+ sysctl_kern_usrstack(SYSCTL_HANDLER_ARGS)
+ {
+ 	struct proc *p;
+@@ -993,6 +1024,7 @@ exec_new_vmspace(imgp, sv)
+ 	vm_offset_t stack_addr;
+ 	vm_map_t map;
+ 	u_long ssiz;
++	struct spage *spage;
+ 
+ 	imgp->vmspace_destroyed = 1;
+ 	imgp->sysent = sv;
+@@ -1046,6 +1078,14 @@ exec_new_vmspace(imgp, sv)
+ 	vmspace->vm_ssize = sgrowsiz >> PAGE_SHIFT;
+ 	vmspace->vm_maxsaddr = (char *)sv->sv_usrstack - ssiz;
+ 
++	/* Allocate requested shared pages. */
++	p->p_numspages = 0;
++	vm_spage_alloc(p, PAGE_SIZE, SPAGE_META, FALSE);
++	spage = vm_spage_alloc(p, PAGE_SIZE, SPAGE_GENERIC, TRUE);
++	if (vdso_setup(VDSO_NSYM, vdso_generic_symv, &vdso_generic_start,
++	    vdso_generic_size, p, (caddr_t) spage->addr) != 0)
++		panic("exec_new_vmspace: unable to set vdso up");
++
+ 	return (0);
+ }
+ 
+diff -uprN src.orig/sys/kern/kern_fork.c src/sys/kern/kern_fork.c
+--- src.orig/sys/kern/kern_fork.c	2009-02-08 19:05:51.000000000 +0100
++++ src/sys/kern/kern_fork.c	2009-09-13 18:58:53.000000000 +0200
+@@ -37,6 +37,8 @@
+ #include <sys/cdefs.h>
+ __FBSDID("$FreeBSD: src/sys/kern/kern_fork.c,v 1.295 2008/07/23 08:45:25 kib Exp $");
+ 
++#define	VDSO_GENERIC_SYMV
++
+ #include "opt_kdtrace.h"
+ #include "opt_ktrace.h"
+ #include "opt_mac.h"
+@@ -67,6 +69,7 @@ __FBSDID("$FreeBSD: src/sys/kern/kern_fo
+ #include <sys/sdt.h>
+ #include <sys/sx.h>
+ #include <sys/signalvar.h>
++#include <sys/vdso.h>
+ 
+ #include <security/audit/audit.h>
+ #include <security/mac/mac_framework.h>
+@@ -834,6 +837,7 @@ fork_return(td, frame)
+ 	struct thread *td;
+ 	struct trapframe *frame;
+ {
++	struct spage *spage;
+ 
+ 	userret(td, frame);
+ #ifdef KTRACE
+@@ -841,4 +845,11 @@ fork_return(td, frame)
+ 		ktrsysret(SYS_fork, 0, 0);
+ #endif
+ 	mtx_assert(&Giant, MA_NOTOWNED);
++
++	SPAGE_FIND(spage, type, SPAGE_GENERIC, td->td_proc);
++	if (spage == NULL)
++		panic("fork_return: unable to find generic shared page");
++	if (vdso_setup(VDSO_NSYM, vdso_generic_symv, &vdso_generic_start,
++	    vdso_generic_size, td->td_proc, (caddr_t) spage->addr) != 0)
++		panic("fork_return: unable to set vdso up");
+ }
+diff -uprN src.orig/sys/kern/vdso_common.c src/sys/kern/vdso_common.c
+--- src.orig/sys/kern/vdso_common.c	1970-01-01 01:00:00.000000000 +0100
++++ src/sys/kern/vdso_common.c	2009-09-13 19:08:28.000000000 +0200
+@@ -0,0 +1,229 @@
++#include <sys/param.h>
++#include <sys/lock.h>
++#include <sys/malloc.h>
++#include <sys/mutex.h>
++#include <sys/proc.h>
++#include <sys/systm.h>
++#include <sys/vdso.h>
++
++#include <machine/elf.h>
++
++static unsigned long	elf_hash(const char *);
++static int		vdso_from_addr(struct vdso *, caddr_t);
++static int		vdso_lookup_symbol(Elf_Sym *, const char *,
++			    struct vdso *);
++
++#define	VDSO_SET_SYMBOL(x)	do {					\
++	if (ret != 0)							\
++		return (ret);						\
++	PROC_LOCK(p);							\
++	data = (x);							\
++	PROC_UNLOCK(p);							\
++	bcopy(&data, vdso.addr + sym.st_value, sizeof(int));		\
++} while (0)
++
++/*
++ * Given a number of symbols and an array of symbol identifiers by
++ * the 'reqc' and 'reqv' arguments respectively, set numerical
++ * expression for each symbol requested, as indicated by its identifier,
++ * that being a process's property. Data is written to the vdso's kernel
++ * memory location directly and then propagated to the user space address
++ * specified by the 'uaddr' argument.
++ */
++int
++vdso_setup(int reqc, u_int *reqv, caddr_t vdso_va, size_t size, struct proc *p,
++    caddr_t uaddr)
++{
++	struct vdso vdso;
++	Elf_Sym sym;
++	int i, ret, data;
++
++	ret = vdso_from_addr(&vdso, vdso_va);
++	if (ret != 0)
++		return (ret);
++
++	if (reqc == 0 || reqv == NULL)
++		goto done;
++
++	for (i = 0; i < reqc; i++) {
++		switch (reqv[i]) {
++		case VDSO_PID:
++			ret = vdso_lookup_symbol(&sym, "vpid", &vdso);
++			VDSO_SET_SYMBOL(p->p_pid);
++			break;
++		case VDSO_PPID:
++			ret = vdso_lookup_symbol(&sym, "vppid", &vdso);
++			VDSO_SET_SYMBOL(p->p_pptr->p_pid);
++			break;
++		case VDSO_PGRP:
++			ret = vdso_lookup_symbol(&sym, "vpgrp", &vdso);
++			VDSO_SET_SYMBOL(p->p_pgrp->pg_id);
++			break;
++		case VDSO_SID:
++			ret = vdso_lookup_symbol(&sym, "vsid", &vdso);
++			VDSO_SET_SYMBOL(p->p_session->s_sid);
++			break;
++		case VDSO_UID:
++			ret = vdso_lookup_symbol(&sym, "vuid", &vdso);
++			VDSO_SET_SYMBOL(p->p_ucred->cr_ruid);
++			break;
++		case VDSO_EUID:
++			ret = vdso_lookup_symbol(&sym, "veuid", &vdso);
++			VDSO_SET_SYMBOL(p->p_ucred->cr_uid);
++			break;
++		case VDSO_GID:
++			ret = vdso_lookup_symbol(&sym, "vgid", &vdso);
++			VDSO_SET_SYMBOL(p->p_ucred->cr_rgid);
++			break;
++		case VDSO_EGID:
++			ret = vdso_lookup_symbol(&sym, "vegid", &vdso);
++			VDSO_SET_SYMBOL(p->p_ucred->cr_groups[0]);
++			break;
++		default:
++			return (EINVAL);
++			break;
++			/* NOTREACHED */
++		}
++	}
++
++done:
++	copyout(vdso.addr, uaddr, size);
++	return (0);
++}
++
++static unsigned long
++elf_hash(const char *name)
++{
++	const unsigned char *p = (const unsigned char *) name;
++	unsigned long h = 0;
++	unsigned long g;
++
++	while (*p != '\0') {
++		h = (h << 4) + *p++;
++		if ((g = h & 0xf0000000) != 0)
++			h ^= g >> 24;
++		h &= ~g;
++	}
++
++	return h;
++}
++
++/*
++ * Allocate and fill a vdso descriptor properly, given the
++ * vdso's kernel memory address.
++ */
++int
++vdso_from_addr(struct vdso *vdso, caddr_t addr)
++{
++	Elf_Shdr *shdr_table, *shdr_hash, *shdr_dynsym, *shdr_dynstr;
++	Elf_Ehdr *ehdr;
++	caddr_t pos = addr;
++	int i;
++
++	ehdr = (Elf_Ehdr *) pos; 
++
++	/* Always consider the possibility of a wrong vdso. */
++	if (!IS_ELF(*ehdr) || ehdr->e_ident[EI_CLASS] != ELF_TARG_CLASS ||
++	    ehdr->e_ident[EI_DATA] != ELF_TARG_DATA ||
++	    ehdr->e_ident[EI_VERSION] != EV_CURRENT ||
++	    ehdr->e_version != EV_CURRENT || 
++	    (ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN) ||
++	    ehdr->e_machine != ELF_TARG_MACH) {
++		printf("vdso_from_addr: wrong file format\n");
++		return (ENOEXEC);
++	}
++
++	pos += ehdr->e_shoff;
++	shdr_table = (Elf_Shdr *) pos;
++	shdr_hash = NULL;
++	shdr_dynsym = NULL;
++	shdr_dynstr = NULL;
++
++	/* Get the relevant section headers from the section header table. */
++	for (i = 0; i < ehdr->e_shnum; i++) {
++		if (shdr_table[i].sh_type == SHT_HASH)
++			shdr_hash = &shdr_table[i];
++		if (shdr_table[i].sh_type == SHT_DYNSYM)
++			shdr_dynsym = &shdr_table[i];
++		if (shdr_table[i].sh_type == SHT_STRTAB &&
++		    shdr_table[i].sh_addr != 0)
++			shdr_dynstr = &shdr_table[i];
++	}
++
++	if (shdr_hash == NULL || shdr_dynsym == NULL || shdr_dynstr == NULL) {
++		printf("vdso_from_addr: error in section header table\n");
++		return (ENOEXEC);
++	}
++
++	vdso->addr = addr;
++	vdso->ehdr = ehdr;
++	vdso->shdr_hash = shdr_hash;
++	vdso->shdr_dynsym = shdr_dynsym;
++	vdso->shdr_dynstr = shdr_dynstr;
++
++	return (0);
++}
++
++/*
++ * Look for a symbol in the vdso's symbol table, using the
++ * search algorithm specified by the ELF ABI.
++ */
++static int
++vdso_lookup_symbol(Elf_Sym *sym, const char *name, struct vdso *vdso)
++{
++	Elf_Hashelt nbuckets, nchains, *buckets, *chains;
++	caddr_t pos, hashtab, dynsym, dynstr;
++	unsigned long hash, symindex;
++	const char *symname;
++
++	pos = vdso->addr;
++	hashtab = pos + vdso->shdr_hash->sh_offset;
++	dynsym = pos + vdso->shdr_dynsym->sh_offset;
++	dynstr = pos + vdso->shdr_dynstr->sh_offset;
++
++	/* nbuckets and nchains are on top of the hash table. */
++	pos = hashtab;
++	bcopy(pos, &nbuckets, sizeof(Elf_Hashelt));
++	pos += sizeof(Elf_Hashelt);
++	bcopy(pos, &nchains, sizeof(Elf_Hashelt));
++	if (nbuckets == 0 || nchains == 0) {
++		printf("vdso_lookup_symbol: error in hash table\n");
++		return (ENOEXEC); 
++	}
++
++	/* Get the bucket and chain arrays. */
++	pos += sizeof(Elf_Hashelt);
++	buckets = (Elf_Hashelt *) pos;
++	pos += nbuckets * sizeof(Elf_Hashelt);
++	chains = (Elf_Hashelt *) pos;
++
++        hash = elf_hash(name);
++        symindex = buckets[hash % nbuckets];
++
++	/* Symbol lookup. */
++	while (symindex != STN_UNDEF) {
++		if (symindex >= nchains) {
++			printf("vdso_lookup_symbol: corrupt symbol table\n");
++			return (ENOEXEC);
++		}
++		/* Get symbol from the dynamic symbol table. */
++		pos = dynsym + (symindex * sizeof(Elf_Sym));
++		bcopy(pos, sym, sizeof(Elf_Sym));
++		if (sym->st_value == 0) {
++			printf("vdso_lookup_symbol: wrong symbol\n");
++			return (ENOEXEC);
++		}
++
++		/* Check whether it is the symbol we are looking for. */
++		symname = dynstr + sym->st_name;
++		if (strcmp(name, symname) == 0)
++			return (0);
++
++		/* Look for the next symbol with the same hash value. */
++		symindex = chains[symindex];
++	}
++
++	/* No symbol found. */
++	printf("vdso_lookup_symbol: no symbol found\n");
++	return (EINVAL);
++}
+diff -uprN src.orig/sys/kern/vdso_generic.ldscript src/sys/kern/vdso_generic.ldscript
+--- src.orig/sys/kern/vdso_generic.ldscript	1970-01-01 01:00:00.000000000 +0100
++++ src/sys/kern/vdso_generic.ldscript	2009-09-12 19:46:45.000000000 +0200
+@@ -0,0 +1,23 @@
++SECTIONS
++{
++	. = +SIZEOF_HEADERS;
++	.hash		: { *(.hash) }			:data
++	.gnu.hash	: { *(.gnu.hash) }
++	.dynsym		: { *(.dynsym) }
++	.dynstr		: { *(.dynstr) }
++	.gnu.version	: { *(.gnu.version) }
++	.gnu.version_d	: { *(.gnu.version_d) }
++	.gnu.version_r	: { *(.gnu.version_r) }
++	.dynamic	: { *(.dynamic) }		:data :dynamic
++	.data		: { *(.data) }			:data
++	.trash		: {
++		*(.got.plt) *(.got) *(.text) *(.gnu.linkonce.d.*)
++		*(.dynbss .bss .bss.* .gnu.linkonce.b.*)
++	}
++}
++
++PHDRS
++{
++	data PT_LOAD;
++	dynamic PT_DYNAMIC;
++}
+diff -uprN src.orig/sys/kern/vdso_generic.s src/sys/kern/vdso_generic.s
+--- src.orig/sys/kern/vdso_generic.s	1970-01-01 01:00:00.000000000 +0100
++++ src/sys/kern/vdso_generic.s	2009-09-12 19:46:45.000000000 +0200
+@@ -0,0 +1,29 @@
++#include <machine/asmacros.h>
++/*
++ * What follows are machine independent pseudo-ops, so it will hurt no one
++ * if it is placed here. C-language equivalent of this is very HUGE in size,
++ * hence leave it asm-dressed, since it is going to be mapped in memory.
++ */
++
++	.data
++	ALIGN_DATA
++
++	.globl vpid, vppid, vpgrp, vsid, vuid, veuid, vgid, vegid
++
++	.type vpid, @object
++	.type vppid, @object
++	.type vpgrp, @object
++	.type vsid, @object
++	.type vuid, @object
++	.type veuid, @object
++	.type vgid, @object
++	.type vegid, @object
++
++vpid:	.int	-1
++vppid:	.int	-1
++vpgrp:	.int	-1
++vsid:	.int	-1
++vuid:	.int	-1
++veuid:	.int	-1
++vgid:	.int	-1
++vegid:	.int	-1
+diff -uprN src.orig/sys/kern/vdso_generic_syms.s src/sys/kern/vdso_generic_syms.s
+--- src.orig/sys/kern/vdso_generic_syms.s	1970-01-01 01:00:00.000000000 +0100
++++ src/sys/kern/vdso_generic_syms.s	2009-09-12 19:46:45.000000000 +0200
+@@ -0,0 +1,12 @@
++#include <machine/asmacros.h>
++
++	.data
++	ALIGN_DATA
++	.globl	vdso_generic_start, vdso_generic_end
++vdso_generic_start:
++	.incbin "vdso_generic.so"
++vdso_generic_end:
++
++	.globl	vdso_generic_size
++vdso_generic_size:
++	.int	vdso_generic_end - vdso_generic_start
+diff -uprN src.orig/sys/sys/proc.h src/sys/sys/proc.h
+--- src.orig/sys/sys/proc.h	2009-02-08 19:06:41.000000000 +0100
++++ src/sys/sys/proc.h	2009-09-13 16:32:57.000000000 +0200
+@@ -532,6 +532,8 @@ struct proc {
+ 	STAILQ_HEAD(, ktr_request)	p_ktr;	/* (o) KTR event queue. */
+ 	LIST_HEAD(, mqueue_notifier)	p_mqnotifier; /* (c) mqueue notifiers.*/
+ 	struct kdtrace_proc	*p_dtrace; /* (*) DTrace-specific data. */
++	STAILQ_HEAD(, spage)	p_spages; /* (b) Shared page stailq. */
++	int		p_numspages;	/* Number of shared pages. */ 
+ };
+ 
+ #define	p_session	p_pgrp->pg_session
+diff -uprN src.orig/sys/sys/vdso.h src/sys/sys/vdso.h
+--- src.orig/sys/sys/vdso.h	1970-01-01 01:00:00.000000000 +0100
++++ src/sys/sys/vdso.h	2009-09-22 17:58:56.000000000 +0200
+@@ -0,0 +1,49 @@
++#ifndef _SYS_VDSO_H_
++#define _SYS_VDSO_H_
++
++#include <sys/types.h>
++#include <machine/elf.h>
++
++extern char	vdso_generic_start;	/* First byte in the generic vdso. */
++extern size_t	vdso_generic_size;	/* Size of the generic vdso. */
++
++/*
++ * Vdso descriptor.
++ */
++struct vdso {
++	caddr_t	addr;			/* Where the vdso is mapped to. */
++	Elf_Ehdr	*ehdr;		/* Vdso's elf header.*/
++	Elf_Shdr	*shdr_hash;	/* Hash table's section header. */
++	Elf_Shdr	*shdr_dynsym;	/* Symbol table's section header. */
++	Elf_Shdr	*shdr_dynstr;	/* String table's section header. */
++};
++
++/*
++ * Vdso's symbol identifiers.
++ */
++#define	VDSO_PID		0
++#define	VDSO_PPID		1
++#define	VDSO_PGRP		2
++#define	VDSO_SID		3
++#define	VDSO_UID		4
++#define	VDSO_EUID		5
++#define	VDSO_GID		6
++#define	VDSO_EGID		7
++#define	VDSO_NSYM		8
++
++#ifdef	VDSO_GENERIC_SYMV
++static u_int vdso_generic_symv[] = {
++	VDSO_PID,
++	VDSO_PPID,
++	VDSO_PGRP,
++	VDSO_SID,
++	VDSO_UID,
++	VDSO_EUID,
++	VDSO_GID,
++	VDSO_EGID
++};
++#endif
++
++int	vdso_setup(int, u_int *, caddr_t, size_t, struct proc *, caddr_t);
++
++#endif /* !_SYS_VDSO_H */
+diff -uprN src.orig/sys/vm/vm_glue.c src/sys/vm/vm_glue.c
+--- src.orig/sys/vm/vm_glue.c	2009-02-08 19:06:43.000000000 +0100
++++ src/sys/vm/vm_glue.c	2009-09-13 18:11:56.000000000 +0200
+@@ -76,6 +76,8 @@ __FBSDID("$FreeBSD: src/sys/vm/vm_glue.c
+ #include <sys/vmmeter.h>
+ #include <sys/sx.h>
+ #include <sys/sysctl.h>
++#include <sys/malloc.h>
++#include <sys/types.h>
+ 
+ #include <sys/kernel.h>
+ #include <sys/ktr.h>
+@@ -516,7 +518,7 @@ vm_forkproc(td, p2, td2, vm2, flags)
+ 	int flags;
+ {
+ 	struct proc *p1 = td->td_proc;
+-	int error;
++	int err;
+ 
+ 	if ((flags & RFPROC) == 0) {
+ 		/*
+@@ -526,9 +528,9 @@ vm_forkproc(td, p2, td2, vm2, flags)
+ 		 */
+ 		if ((flags & RFMEM) == 0) {
+ 			if (p1->p_vmspace->vm_refcnt > 1) {
+-				error = vmspace_unshare(p1);
+-				if (error)
+-					return (error);
++				err = vmspace_unshare(p1);
++				if (err)
++					return (err);
+ 			}
+ 		}
+ 		cpu_fork(td, p2, td2, flags);
+@@ -551,6 +553,20 @@ vm_forkproc(td, p2, td2, vm2, flags)
+ 	}
+ 
+ 	/*
++	 * Allocate requested shared pages, or inherit them from
++	 * the parent process: if the parent already has shared
++	 * pages, their entries surely have been copied to the child's
++	 * address space due to vmspace_fork, thus in this case we just
++	 * need to set up the child's shared page stailq according to
++	 * the parent's one.
++	 */ 
++	p2->p_numspages = 0;
++	if (vm_spage_copy(p1, p2, SPAGE_META) != KERN_SUCCESS)
++		vm_spage_alloc(p2, PAGE_SIZE, SPAGE_META, FALSE);
++	if (vm_spage_copy(p1, p2, SPAGE_GENERIC) != KERN_SUCCESS)
++		vm_spage_alloc(p2, PAGE_SIZE, SPAGE_META, TRUE);
++
++	/*
+ 	 * cpu_fork will copy and update the pcb, set up the kernel stack,
+ 	 * and make the child ready to run.
+ 	 */
+@@ -567,6 +583,15 @@ void
+ vm_waitproc(p)
+ 	struct proc *p;
+ {
++	struct spage *spage1, *spage2;
++
++	/* Remove all allocated shared pages. */ 
++	spage1 = STAILQ_FIRST(&p->p_spages);
++	while (spage1 != NULL) {
++		spage2 = STAILQ_NEXT(spage1, spages);
++		vm_spage_delete(p, spage1);
++		spage1 = spage2;
++	}
+ 
+ 	vmspace_exitfree(p);		/* and clean-out the vmspace */
+ }
+diff -uprN src.orig/sys/vm/vm_map.c src/sys/vm/vm_map.c
+--- src.orig/sys/vm/vm_map.c	2009-02-08 19:06:43.000000000 +0100
++++ src/sys/vm/vm_map.c	2009-09-13 17:01:18.000000000 +0200
+@@ -3357,6 +3357,155 @@ vm_map_lookup_done(vm_map_t map, vm_map_
+ 	vm_map_unlock_read(map);
+ }
+ 
++/*
++ *	vm_spage_alloc:
++ *
++ *	Allocates a memory entry to be shared between the kernel and the
++ *	user process. Update the meta shared page content to keep track
++ *	of the just mapped shared page. We assume that the meta shared
++ *	page has already been mapped and that it has been placed at the
++ *	head of the shared page tailq, so we care about allocating it
++ *	before every other shared page request.
++ */
++struct spage *
++vm_spage_alloc(struct proc *p, size_t size, u_int type, boolean_t vdso)
++{
++	struct spage *spage, *metaspage;
++	vm_map_t map = &p->p_vmspace->vm_map;
++	u_int *metaindex = NULL;
++	vm_offset_t addr;
++	int ret;
++	
++	if (type > SPAGE_SCTRAMP)
++		return (NULL);
++
++	size = round_page(size);
++	PROC_VMSPACE_LOCK(p);
++	addr = round_page((vm_offset_t) p->p_vmspace->vm_maxsaddr);
++	PROC_VMSPACE_UNLOCK(p);
++
++	ret = vm_map_find(map, NULL, addr, &addr, size, VMFS_ANY_SPACE,
++	    VM_PROT_RW, VM_PROT_RW, 0);
++	if (ret != KERN_SUCCESS)
++		panic("vm_spage_alloc: unable to allocate shared page");
++
++	ret = vm_map_wire(map, addr, addr + size, VM_MAP_WIRE_USER);
++	if (ret != KERN_SUCCESS)
++		panic("vm_spage_alloc: unable to wire shared page");
++
++	spage = malloc(sizeof(struct spage), M_TEMP, M_NOWAIT|M_ZERO);
++	if (spage == NULL)
++		panic("vm_spage_alloc: unable to allocate spage list entry");
++	spage->addr = addr;
++	spage->size = size; 
++	spage->type = type;
++	spage->vdso = vdso;
++	spage->priv = NULL;
++
++	if (type == SPAGE_META) {
++		metaindex = malloc(sizeof(int), M_TEMP, M_NOWAIT|M_ZERO);
++		if (metaindex == NULL)
++			panic("vm_spage_alloc: unable to alloc metaindex");
++		*metaindex = 0;
++		spage->priv = metaindex;
++		STAILQ_INSERT_HEAD(&p->p_spages, spage, spages);
++	} else {
++		u_int metainfo[4] = { 0 };
++		/* Copy only these data in the meta shared page. */
++		metainfo[0] = spage->addr;
++		metainfo[1] = spage->size;
++		metainfo[2] = spage->type;
++		metainfo[3] = spage->vdso;
++ 
++		metaspage = STAILQ_FIRST(&p->p_spages);
++		if (metaspage == NULL || metaspage->type != SPAGE_META)
++			metaspage = vm_spage_alloc(p, PAGE_SIZE, SPAGE_META,
++			    FALSE);
++		metaindex = metaspage->priv;
++		STAILQ_INSERT_TAIL(&p->p_spages, spage, spages);
++		copyout(metainfo, (caddr_t) (metaspage->addr + *metaindex),
++		    sizeof(metainfo));
++		/*
++		 * The private field of the meta shared page is used as a
++		 * position indicator offset inside the page.
++		 */
++		*metaindex += sizeof(metainfo);
++	}
++
++	p->p_numspages++;
++
++	return (spage);
++}
++
++/*
++ *	vm_spage_delete:
++ *
++ *	Deallocates a previously mapped shared page entry.
++ */
++int
++vm_spage_delete(struct proc *p, struct spage *spage)
++{ 
++	vm_map_t map;
++
++	PROC_VMSPACE_LOCK(p);
++	map = &p->p_vmspace->vm_map;
++	PROC_VMSPACE_UNLOCK(p);
++
++	if (spage->priv != NULL)
++		free(spage->priv, M_TEMP);
++	vm_map_unwire(map, spage->addr, spage->addr + spage->size,
++	    VM_MAP_WIRE_USER);
++	vm_map_remove(map, spage->addr, spage->addr + spage->size);
++	STAILQ_REMOVE(&p->p_spages, spage, spage, spages);
++	free(spage, M_TEMP);
++	p->p_numspages--;
++
++	return (KERN_SUCCESS);
++}
++
++/*
++ * Copy shared page tail queue entry between two processes
++ * according to the shared page type.
++ */
++int
++vm_spage_copy(struct proc *p1, struct proc *p2, u_int type)
++{
++	struct spage *spage1, *spage2;
++	void *priv;
++
++	if (STAILQ_EMPTY(&p1->p_spages) || p1->p_numspages <= 0)
++		return (KERN_INVALID_ARGUMENT);
++	if (type > SPAGE_SCTRAMP)
++		return (KERN_INVALID_ARGUMENT);
++
++	STAILQ_FOREACH(spage1, &p1->p_spages, spages) {
++		if (spage1->type != type)
++			continue;
++		spage2 = malloc(sizeof(struct spage), M_TEMP, M_NOWAIT|M_ZERO);
++		if (spage2 == NULL)
++			panic("vm_spages_copy: unable to allocate spage list "
++			    "entry");
++		bcopy(spage1, spage2, sizeof(struct spage));
++		if (spage1->priv != NULL) {
++			priv = malloc(sizeof(int), M_TEMP, M_NOWAIT|M_ZERO);
++			if (priv == NULL)
++				panic("vm_spages_copy: unable to allocate "
++				    "spage private field");
++			bcopy(spage1->priv, priv, sizeof(int));
++			spage2->priv = priv;
++		}
++		if (type == SPAGE_META)
++			STAILQ_INSERT_HEAD(&p2->p_spages, spage2, spages);
++		else
++			STAILQ_INSERT_TAIL(&p2->p_spages, spage2, spages);
++
++		p2->p_numspages++;
++		return (KERN_SUCCESS);
++	}
++
++	return (KERN_FAILURE); 
++}
++
+ #include "opt_ddb.h"
+ #ifdef DDB
+ #include <sys/kernel.h>
+diff -uprN src.orig/sys/vm/vm_map.h src/sys/vm/vm_map.h
+--- src.orig/sys/vm/vm_map.h	2009-02-08 19:06:43.000000000 +0100
++++ src/sys/vm/vm_map.h	2009-09-22 17:58:37.000000000 +0200
+@@ -250,6 +250,39 @@ struct vmspace {
+ 	struct pmap vm_pmap;	/* private physical map */
+ };
+ 
++/*
++ * Shared page types.
++ */
++#define	SPAGE_META		0	/* Meta shared page. */
++#define	SPAGE_GENERIC		1	/* Generic shared page. */
++#define	SPAGE_SCTRAMP		2	/* Syscall trampoline shared page. */
++
++/*
++ * Shared page descriptor.
++ */
++struct spage {
++	STAILQ_ENTRY(spage) spages;
++	vm_offset_t	addr;	/* User VA where the page is mapped to. */
++	size_t		size;	/* This has to be a multiple of PAGE_SIZE. */
++	u_int		type;	/* See defines above. */ 
++	boolean_t	vdso;	/* Does the spage contain a vdso? */
++	void		*priv;	/* Private use only. */
++};
++
++/*
++ * Shared page macros.
++ */
++#define	SPAGE_FIND(s, f, v, p) do {					\
++	struct spage *tmp;						\
++	STAILQ_FOREACH((s), &(p)->p_spages, spages)			\
++		if ((s)->f == (v)) {					\
++			tmp = (s);					\
++			break;						\
++		} else							\
++			tmp = NULL;					\
++	(s) = tmp;							\
++} while (0)
++
+ #ifdef	_KERNEL
+ static __inline pmap_t
+ vmspace_pmap(struct vmspace *vmspace)
+@@ -375,5 +408,9 @@ int vm_map_unwire(vm_map_t map, vm_offse
+ int vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end,
+     int flags);
+ int vmspace_swap_count (struct vmspace *vmspace);
++struct spage * vm_spage_alloc(struct proc *, size_t, u_int, boolean_t);
++int vm_spage_delete(struct proc *, struct spage *);
++int vm_spage_copy(struct proc *, struct proc *, u_int);
++
+ #endif				/* _KERNEL */
+ #endif				/* _VM_MAP_ */

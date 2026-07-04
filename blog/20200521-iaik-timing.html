@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="keywords" content="vulnerability, cryptography, side-channel, DSA">
+  <title>Timing Attack Side Channel in IAIK JCE DSA Implementation</title>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../style.css">
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <header>
+    <h1>My self is steam</h1>
+    <p>Insights into computer security, programming and math</p>
+  </header>
+  <nav>
+    <a href="index.html">Index</a>
+    <a href="../index.html">About</a>
+    <a href="feed.xml">RSS</a>
+  </nav>
+  <hr>
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+
+<body>
+  <article>
+    <h2>
+      <div class="adate">May 21, 2020</div>
+      <a href="20200521-iaik-timing.html">Timing Attack Side Channel in IAIK JCE DSA Implementation</a>
+    </h2>
+
+<p>
+IAIK-JCE is a provider for the Java Cryptography Extension that,
+according to the vendor, <em>"supplements the security functionality
+of the default JDK"</em>. It is a commercial product developed by <a
+href="https://jce.iaik.tugraz.at/about-us/">Stiftung Secure Information
+and Communication Technologies</a>, a spin-off of the Institute for
+Applied Information Processing and Communication” (IAIK) of the
+University of Graz. The company is kind enough to offer a full,
+free evaluation version for any non-commercial use.
+</p>
+
+<p>
+By observing the behavior of the latest version (5.60 as of today), one can get
+a glimpse of how the major cryptographic algorithms are implemented. This
+process led me to the discovery of a subtle vulnerability in the
+implementation of the DSA algorithm: the way that some of the computations
+involved in the signature generation are carried out introduces a side
+channel that leaks timing information from the observation of which an
+attacker could potentially recover the private key.
+</p>
+</article>
+
+<p>
+The same kind of issue affected
+other popular JCE providers, for instance <a
+href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-5548">CVE-2016-5548</a>,
+<a
+href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-1000341">CVE-2016-1000341</a>,
+<a
+href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-3739">CVE-2019-3739</a>,
+and it's related to the fact that a flawed implementation typically
+relies on non-constant-time modular exponentiation to compute parts of
+the signature.  Let's quickly review how signatures are generated in
+the general setting of the DSA algorithm.  Let <math><msubsup><mi mathvariant="double-struck">Z</mi><mi>p</mi><mo>*</mo></msubsup></math> 
+be the reduced residue system modulo a prime
+<math><mi>p</mi></math> whose length is usually chosen among
+1024, 2048, 3072, 4096.  This set forms a cyclic group of cardinality
+<math><mi>φ</mi><mo>(</mo><mi>p</mi><mo>)</mo><mo>=</mo><mi>p</mi><mo>-</mo><mn>1</mn></math> under
+multiplication.  A consequence of <a
+href="https://en.wikipedia.org/wiki/Lagrange%27s_theorem_(group_theory)">Lagrange's
+theorem</a> is that we can construct
+a cyclic subgroup of <math><msubsup><mi mathvariant="double-struck">Z</mi><mi>p</mi><mo>*</mo></msubsup></math> 
+with cardinality equal to a smaller prime <math><mi>q</mi></math> by
+choosing <math><mi>p</mi></math> so that <math><mi>q</mi></math>
+divides <math><mi>p</mi><mo>-</mo><mn>1</mn></math>. Since
+the order of any element of <math><msubsup><mi mathvariant="double-struck">Z</mi><mi>p</mi><mo>*</mo></msubsup></math> 
+must divide
+<math><mi>p</mi><mo>-</mo><mn>1</mn></math>, by choosing a random
+<math><mi>a</mi><mo>&#xA0;</mo><mo>&#x2264;</mo><mo>&#xA0;</mo><mi>p</mi><mo>-</mo><mn>1</mn></math>
+we obtain a primitive element that generates
+the whole subgroup of order <math><mi>q</mi></math> by
+<math><mi>g</mi><mo>=</mo><msup><mi>a</mi><mfrac><mrow><mi>p</mi><mo>-</mo><mn>1</mn></mrow><mi>q</mi></mfrac></msup></math>.
+This makes the subgroup closed under multiplication
+modulo <math><mi>p</mi></math> and, by consequence, under
+exponentiation, so that any power of <math><mi>g</mi></math>
+still belongs to the subgroup.  We will call
+<math><mi>y</mi><mo>=</mo><msup><mi>g</mi><mi>x</mi></msup></math>
+the <em>public key</em> whereas a randomly chosen
+<math><mi>x</mi><mo>&#x2264;</mo><mi>q</mi><mo>-</mo><mn>1</mn></math>
+is the <em>private key</em>.  </p>
+
+<p>
+Given a message <math><mi>m</mi></math>, a signature is the couple
+<math><mo>(</mo><mi>r</mi><mo>,</mo><mi>s</mi><mo>)</mo></math>, generated as follows:
+</p>
+
+<div class="centered">
+<math><mi>r</mi><mo>=</mo><mo>(</mo><msup><mi>g</mi><mi>k</mi></msup><mo>&#xa0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xa0;</mo><mi>p</mi><mo>)</mo><mo>&#xa0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xa0;</mo><mi>q</mi></math>
+<br>
+<math><mi>s</mi><mo>=</mo><mo>(</mo><msup><mi>k</mi><mrow><mo>-</mo><mn>1</mn></mrow></msup><mo>(</mo><mi>H</mi><mo>(</mo><mi>m</mi><mo>)</mo><mo>+</mo><mi>x</mi><mi>r</mi><mo>)</mo><mo>)</mo><mo>&#xa0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xa0;</mo><mi>q</mi></math>
+</div>
+
+<p>
+Where
+<math><mn>1</mn><mo>&#x2264;</mo><mi>k</mi><mo>&#x2264;</mo><mi>q</mi><mo>-</mo><mn>1</mn></math>
+is randomly chosen and <em>H</em> denotes a hash
+function whose digest length matches the length of
+<math><mi>q</mi></math>.  The modular exponentiation of big
+integers is usually implemented by means of a technique named <a
+href="https://en.wikipedia.org/wiki/Exponentiation_by_squaring">exponentiation
+by squaring</a>, which exploits the binary representation of
+the exponent to perform fast computations compared to the trivial
+iterated-multiplication. The observable running time is therefore
+a function dependent on either the length or the binary
+representation of the exponent. As <a href="https://paulkocher.com/doc/TimingAttacks.pdf">it turns out</a>,
+this is enough to introduce a time correlation between the exponent
+and the computation of the result, and an attacker who carefully
+observes the time taken to generate the signatures could extract
+partial information about the exponent <math><mi>k</mi></math>. This
+partial information could be used to recover the whole exponent
+and therefore the private key <math><mi>x</mi></math>, as <a
+href="https://www.researchgate.net/publication/225240686_Lattice_Attacks_on_Digital_Signature_Schemes">there
+exist techniques</a> to reconstruct an
+integer of a prime field like <math><msubsup><mi
+mathvariant="double-struck">Z</mi><mi>p</mi><mo>*</mo></msubsup></math>
+knowing only a few bits of it.  This kind of side channels is usually
+thwarted in software implementations with the help of a technique named <a
+href="https://github.com/bcgit/bc-java/commit/acaac81f96fec91ab45bd0412beaf9c3acd8defa#diff-e75226a9ca49217a7276b29242ec59ce">blinding</a>,
+where a further random integer is multiplied with the exponent
+before the exponentiation. Another mitigation option is
+the <a href="https://en.wikipedia.org/wiki/Exponentiation_by_squaring#Montgomery's_ladder_technique">Montgomery's ladder</a>.
+</p>
+
+<p>
+Enough of an introduction. Let's see how the IAIK JCE provider implements the
+DSA algorithm. <em>RawDSA.class</em> has the symbol names stripped so
+we have to understand which dummy symbol maps to the right DSA parameter.
+This is easily accomplished by gathering the following lines from across
+the code:
+</p>
+
+<pre>
+  protected void engineInitVerify(PublicKey paramPublicKey) throws InvalidKeyException {
+...
+    this.b = dSAPublicKey.getY();
+...
+  protected void engineInitSign(PrivateKey paramPrivateKey) throws InvalidKeyException {
+...
+    this.a = dSAPrivateKey.getX();
+...
+  private void a(DSAParams paramDSAParams) {
+    this.c = paramDSAParams.getP();
+    this.d = paramDSAParams.getQ();
+    this.e = paramDSAParams.getG();
+  }
+</pre>
+
+<p>
+We are then able to identify all the parameters: 
+</p>
+
+<pre>
+public final class RawDSA extends SignatureSpi {
+  private BigInteger a;     // &lt;--- x, private key
+  
+  private BigInteger b;     // &lt;--- y = g^x, public key
+  
+  private BigInteger c;     // &lt;--- p
+  
+  private BigInteger d;     // &lt;--- q
+  
+  private BigInteger e;     // &lt;--- g
+...
+</pre>
+
+<p>
+Let's now focus on the signature generation.
+</p>
+
+<pre>
+  public BigInteger[] dsaSignRS() {
+    byte[] arrayOfByte = this.dataBuffer_.toByteArray();
+    if (this.i != null)
+      this.i.a(this.a, arrayOfByte);
+    while (true) {
+&#9312;      BigInteger bigInteger1 = a();
+&#9313;      BigInteger bigInteger2 = a(bigInteger1);
+      if (bigInteger2.equals(NumberTheory.ZERO))
+        continue;
+      BigInteger bigInteger3 = a(bigInteger1, bigInteger2, arrayOfByte);
+      if (!bigInteger3.equals(NumberTheory.ZERO))
+        return new BigInteger[] { bigInteger2, bigInteger3 };
+    }
+  }
+</pre>
+
+<p>
+The two <em>bigInteger</em> of interest are all returned by a method
+`a` having three different signatures. The first takes no formal parameters: 
+</p>
+
+<pre>
+&#9312; private BigInteger a() {
+    BigInteger bigInteger;
+    if (this.i != null) {
+      bigInteger = this.i.a();
+    } else {
+      BigInteger bigInteger1;
+      if (this.g == null) {
+        if (this.f == null)
+          this.f = SecRandom.getDefault();
+        int i = this.d.bitLength() + 64;
+        bigInteger1 = new BigInteger(i, this.f);
+      } else {
+        bigInteger1 = new BigInteger(1, this.g);
+        bigInteger1 = bigInteger1.subtract(NumberTheory.ONE);
+      }
+      bigInteger = bigInteger1.mod(this.d.subtract(NumberTheory.ONE)).add(NumberTheory.ONE);
+    }
+    return bigInteger;
+  }
+</pre>
+
+<p>
+The code above combines
+the two algorithms that generate the unique
+ephemeral number <math><mi>k</mi></math>, as described in the <a
+href="https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.186-4.pdf">NIST
+FIPS 186-4 document</a>, appendices B.2.1 and B.2.2, according
+to which a <math><mi>c</mi></math> obtained
+from the RBG is then returned as: <math xmlns="http://www.w3.org/1998/Math/MathML"><mi>k</mi><mo>=</mo><mo>(</mo><mi>c</mi><mo>&#xA0;</mo><mi>m</mi><mi>o</mi><mi>d</mi><mo>&#xA0;</mo><mo>(</mo><mi>q</mi><mo>-</mo><mn>1</mn><mo>)</mo><mo>)</mo><mo>+</mo><mn>1</mn></math>.
+</p>
+
+<p>
+Let's find out what line &#9313; does. The method returns a
+BigInteger and takes the ephemeral <math><mi>k</mi></math> as argument;
+this is indeed the method that calculates <math><mi>r</mi></math>:
+</p>
+
+<pre>
+&#9313; private BigInteger a(BigInteger paramBigInteger) {
+    BigInteger bigInteger = this.e.modPow(paramBigInteger, this.c);
+    return bigInteger.mod(this.d);
+  }
+</pre>
+
+<p>
+This is where the modular exponentiation is performed. The code uses Java
+BigInteger's <a href="https://hg.openjdk.java.net/jdk8/jdk8/jdk/file/tip/src/share/classes/java/math/BigInteger.java">modPow</a>, 
+whose underlying algorithm uses a 
+variant of the Sliding-window method, itself a form of
+exponentiation-by-squaring: the exponent is 
+decomposed into two parts that are then discriminated
+according to whether they are even or odd. The former
+part leads to a completely different set of operations
+than the latter, introducing then the dependency
+on the input. This is what makes the IAIK DSA implementation
+ <b>vulnerable</b> to the timing attack.
+</p>
+
+<p>
+We want to verify our claim with the help of a proof of concept: if
+it's true that the code is vulnerable, a certain correlation between
+either <math><mi>r</mi></math> or the ephemeral <math><mi>k</mi></math> generated at &#9312;,
+and the time taken to compute the signature must
+arise. We therefore generate a large number of signatures and measure the
+time taken by each signature, and record it along with the value of
+each signature's <math><mi>r</mi></math> and <math><mi>k</mi></math>. The
+code for the PoC is available <a href="DSATiming.java">here</a>.
+An entropy daemon like <a href="https://www.issihosts.com/haveged/">Haveged</a>
+is recommended or, at the very least, <em>java.security.egd</em> must
+point to <em>/dev/urandom</em>, since most Java implementations 
+use <em>/dev/random</em> by default and the code could therefore
+block, waiting for more entropy to be harvested.
+The output from the program looks like: </p>
+
+<pre>
+time;r;k
+3040211;304545110037792108352155616342187874653439775526;792415407494206255999175588330041765090379724621
+1759846;994456083602324492753775613997634890006734890312;1147064693348440745986375215220663950617549464466
+1567922;1100375385524368117595997104661333932876798141866;526303025493376784355601406592090222158889264898
+...
+</pre>
+
+<p>
+We test our hypothesis of a dependency between the time and any of
+<math><mi>r</mi></math> or <math><mi>k</mi></math> by calculating the <a
+href="https://en.wikipedia.org/wiki/Spearman%27s_rank_correlation_coefficient">Spearman's
+correlation coefficient</a> between the three variables in the dataset.
+This choice is justified by the fact that we make no assumption on the
+linearity of the correlation, the only hypothesis being that, intuitively,
+the time must be monotonically related with one of the two variables,
+since larger exponents would imply longer times for the exponentiation.
+The correlation coefficients that I obtained for a dataset of 100000 signatures are:
+</p>
+
+<pre>
+          time         r         k
+time  1.000000 -0.005567  0.226051
+r    -0.005567  1.000000 -0.006712
+k     0.226051 -0.006712  1.000000
+</pre>
+
+<p>
+The variable <math><mi>r</mi></math> shows no correlation
+with the time, as the coefficient is practically zero,
+while, unsurpinsingly, the variable <math><mi>k</mi></math>
+shows a positive correlation coefficient of 0.226,
+confirming the monotonical relation with the values of the
+time. This can be also seen from the scatter plot with
+the time variable on the vertical axis, and <math><mi>k</mi></math>
+on the horizontal: 
+</p>
+
+<img class="resize" src="20200521-iaik-plot.png"></img>
+
+<p>
+One might argue over the small value of the correlation
+coefficient. We provide an experimental counter argument
+to convince ourselves of the quality of the test.
+We generate similar datasets with the exactly the same
+code of the PoC against two different Java JCE providers:
+BouncyCastle version 1.54 and 1.64, respectively.
+BouncyCastle versions earlier than 1.56 are all affected
+by a similar vulnerability. We compute the Spearman's
+coefficient for each dataset produced by timing the
+signatures generated with each version. The values
+obtained for version 1.64, which is "immune" due 
+to blinding, are: 
+</p>
+
+<pre>
+          time         r         k
+time  1.000000  0.001817  0.002297
+r     0.001817  1.000000 -0.008206
+k     0.002297 -0.008206  1.000000
+</pre>
+
+<p>
+Indeed, the blinding technique eliminates
+any sort of monotonical correlation between <math><mi>k</mi></math>
+and the time. Let's compare that to the coefficients
+obtained for version 1.54, vulnerable as per <a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-1000341">CVE-2016-1000341</a>:
+</p>
+
+<pre>
+          time         r         k
+time  1.000000 -0.005543  0.204165
+r    -0.005543  1.000000 -0.006380
+k     0.204165 -0.006380  1.000000
+</pre>
+
+<p>
+We clearly see the coefficient of the correlation between
+<math><mi>k</mi></math> and the time to be roughly the same value as the one
+we obtained for the IAIK JCE provider. This completes
+the discussion by adding more evidence to our former claim regarding
+the vulnerability, and a reasonably good confidence on the effectiveness of our 
+testing technique.
+</p>
+
+</body>
+</html>

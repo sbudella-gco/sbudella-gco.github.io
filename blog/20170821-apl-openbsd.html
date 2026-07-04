@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="keywords" content="openbsd, apl, programming">
+  <title>GNU APL on OpenBSD</title>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../style.css">
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <header>
+    <h1>My self is steam</h1>
+    <p>Insights into computer security, programming and math</p>
+  </header>
+  <nav>
+    <a href="index.html">Index</a>
+    <a href="../index.html">About</a>
+    <a href="feed.xml">RSS</a>
+  </nav>
+  <hr>
+</head>
+
+<body>
+  <article>
+    <h2>
+      <div class="adate">August 21, 2017</div>
+      <a href="20170821-apl-openbsd.html">GNU APL on OpenBSD</a>
+    </h2>
+
+    <p>
+    In order to run the <a href="https://www.gnu.org/software/apl/">GNU APL</a>
+    interpreter on OpenBSD, that to the best of my knowledge seems to be
+    one of the very few free
+    <a href="https://sites.google.com/site/baavector/interpreters">APL interpreters</a>
+    available, I created a port that I currently mantain and that will be part
+    of the next OpenBSD release (by the time of this writing is planned to be
+    the 6.2). I also packaged 
+    <a href="http://www.apl385.com/fonts/index.htm">Adrian Smith's original
+    fonts</a>, which are now a dependency of the GNU APL package.
+    For the time being I host both ports on my home page as well.
+    </p>
+  </article>
+
+  <p>
+  However, a little tuning is required before the interpreter is actually
+  usable, and this post serves the purpose of collecting all the necessary
+  steps in one place.
+  </p>
+
+    <p>
+    We install the two ports first (note that the download is not necessary
+    on -current or from 6.2 on):
+    </p>
+
+    <pre>
+    cd /usr/ports/
+    ftp -o - http://sbudella.altervista.org/stuff/apl-fonts.tgz | tar -C fonts/ -xzvf -
+    ftp -o - http://sbudella.altervista.org/stuff/apl.tgz | tar -C lang/ -xzvf -
+    cd lang/apl && make install
+    </pre>
+
+  <p>
+  The first thing we need to enable after we installed the two packages is
+  the UTF-8 character encoding in the locale; I added the following lines to
+  my <em>.profile</em> file:
+  </p>
+
+  <pre>
+  export LC_CTYPE=en_US.UTF-8
+  export LESSCHARSET=utf-8
+  </pre>
+
+  <p>
+  We need to do the same for X, and at the same time specify which font
+  set we want to use; I have the following lines in my <em>.Xdefaults</em>,
+  the latter of which is one of the two fonts that the apl-fonts
+  package installed in <em>/usr/local/share/fonts/apl</em>:
+  </p>
+
+  <pre>
+  XTerm*locale:utf8
+  xterm*faceName:APL385
+  </pre>
+
+  <p>
+  The above steps are enough to ensure that the system displays APL symbols
+  correctly. In order to verify it, the file
+  <em>/etc/gnu-apl.d/keyboard1.txt</em> must show something like this:
+  </p>
+
+  <img class="resize" src="20170821-apl-openbsd-01.png">
+
+  <p>
+  The picture shown provides us with a good starting point
+  for the keyboard layout; as better explained in the documentation, there are
+  many a way to configure the keyboard to use the APL symbols, either system
+  wide or circumscribed to the APL interpreter only. My personal preference
+  is to dedicate ten minutes to writing a custom <em>.XCompose</em> that
+  would spatially map the APL symbols exactly as shown in the picture to
+  the keyboard regardless of whatever layout the latter has. This approach
+  has the benefit of letting us use <em>keyboard1.txt</em> as a quick 
+  mnemonic reference as it is (it works great in a tmux pane, for the
+  ultimate IDE experience).
+  </p>
+
+  <p>
+  There are better news for the lazy: someone else already compiled the
+  <a href="https://lists.gnu.org/archive/html/bug-apl/2014-05/msg00004.html">.XCompose</a>
+  for you. So what is left is to define the compose key in <em>.xinitrc</em>,
+  in my case it's the right control key in order not to clash with tmux and cwm:
+  </p>
+
+  <pre>
+  setxkbmap -option compose:rctrl
+  </pre>
+
+  <p>
+  We are now able to use the best programming language on the best operating system
+  with no clutter.
+  </p>
+
+</body>
+</html>

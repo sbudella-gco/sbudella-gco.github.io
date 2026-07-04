@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="keywords" content="coredns, dns cache poisoning, kaminsky bug">
+  <title>The CoreDNS Cache Poisoning Conjecture</title>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../style.css">
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <header>
+    <h1>My self is steam</h1>
+    <p>Insights into computer security, programming and math</p>
+  </header>
+  <nav>
+    <a href="index.html">Index</a>
+    <a href="../index.html">About</a>
+    <a href="feed.xml">RSS</a>
+  </nav>
+  <hr>
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script>
+      window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']]
+      }
+    };
+  </script>
+</head>
+
+<body>
+  <article>
+    <h2>
+      <div class="adate">March 8, 2023</div>
+      <a href="20230308-coredns-conjecture.html">The CoreDNS Cache Poisoning Conjecture</a>
+    </h2>
+
+<p>
+One of the most important breakthroughs of recent years
+in the field of network security was the revival of the <a
+href="https://www.linuxjournal.com/content/understanding-kaminskys-dns-bug">original
+Kaminsky's</a> cache poisoning attack by <a
+href="https://www.saddns.net/">Keyu Man et al.</a>: thanks to a
+side-channel affecting the ICMP rate limit in the Linux kernel network
+stack, the technique showed how it was possible to unveil the source port
+of the UDP request initiated by a DNS resolver towards the name server.
+The original attack by Dan Kaminsky exploited the small space of random
+transaction IDs, $2^{16}$, to bypass the bailiwick rule which prevented
+rogue glue records from being cached. The fix at the time introduced
+yet more $2^{16}$ bits of randomness by requiring that all source ports of UDP
+requests initiated by the resolver be randomized.  The SADDNS attack
+demonstrated that the randomized port could be discovered by leveraging
+the side-channel in order to infer which initiated UDP
+ports are effectively open during a port scan, therefore reducing again
+the effort to mount the cache poisoning. Indeed, due to the fact that the
+UDP protocol is connection-less, when the resolver initiates the
+requests, anybody knowing the source port number could send datagrams to
+the underlying socket, by using the source port as the destination. "Private" UDP sockets
+are also susceptible of this behavior, with the additional requirement
+that the illegitimate datagrams must spoof the legitimate IP address the
+resolver formerly contacted.  The side channel, and a few more that were
+discovered by the same group, were promptly fixed by the kernel team by
+randomizing the way the rate limit counter was incremented.  Regardless of
+the means by which it was deployed, the technique brought to attention once again
+the importance of randomized source ports of the client-side UDP requests,
+since they represent the one half of the randomness required
+to thwart the original cache poisoning attack, the other half being the
+transaction IDs.
+</p>
+
+<p>
+With these last observations in mind, I decided to go code
+spelunking through <a href="https://github.com/coredns/coredns">CoreDNS</a> source code.  As per its <a
+href="https://coredns.io/manual/setups/">documentation</a>, CoreDNS does
+not have a native recursive resolver, therefore it's not susceptible
+to the classic Kaminsky-bug and the SADDNS variations. Its exposure
+to poisoning attacks is then circumscribed to the "forward" mode of
+operations, besides the cache functionality itself.  Both are implemented
+in the form of plugins.
+
+The forward plugin was found vulnerable to elementary cache poisoning
+during a <a href="https://coredns.io/2018/03/15/cure53-security-assessment/">security audit by Cure53</a>.
+The vulnerability was fixed in commit
+<code>5616fcb175865f2d8ede0460e2537c3b584debad</code>:
+</p>
+
+<pre>
+plugin/forward/forward.go
+
+func (f *Forward) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg
+... 
+       // Check if the reply is correct; if not return FormErr.
+       if !state.Match(ret) {
+               formerr := state.ErrorMessage(dns.RcodeFormatError)
+               w.WriteMsg(formerr)
+               return 0, nil
+       }
+...
+
+</pre>
+
+<p>
+Method <code>Match</code> of request structure is found under <code>request/request.go</code>:
+</p>
+
+<pre>
+func (r *Request) Match(reply *dns.Msg) bool {
+        if len(reply.Question) != 1 {
+                return false
+        }
+
+        if !reply.Response {
+                return false
+        }
+
+        if strings.ToLower(reply.Question[0].Name) != r.Name() {
+                return false
+        }
+
+        if reply.Question[0].Qtype != r.QType() {
+                return false
+        }
+
+        return true
+}
+
+</pre>
+
+<p>
+It basically checks if the reply matches the qname and the qtype from
+the request.
+</p>
+
+<p>
+The cache plugin was found vulnerable
+to a different form of poisoning during an <a
+href="https://coredns.io/2022/02/24/trail-of-bits-security-review/">audit
+by Trails of Bits</a>. Since the caching mechanism is built upon
+the FNV-1 hashing function, which is not collision-resistant, it
+was possible to forge a response that produced the same hash key
+of a legitimate response.  The vulnerability was fixed in commit
+<code>68c887f19e811ffa8bce982305a040dff549891e</code>:</p>
+
+<pre>
+plugin/cache/item.go
+
+type item struct {
+    Name               string
+    QType              uint16
+    Rcode              int
+    AuthenticatedData  bool
+    RecursionAvailable bool
+...
+}
+...
+func newItem(m *dns.Msg, now time.Time, d time.Duration) *item {
+        i := new(item)
+        if len(m.Question) != 0 {
+                i.Name = m.Question[0].Name
+                i.QType = m.Question[0].Qtype
+        }
+...
+
+func (i *item) matches(state request.Request) bool {
+        if state.QType() == i.QType &amp;&amp; strings.EqualFold(state.QName(), i.Name) {
+                return true
+        }
+        return false
+}
+</pre>
+
+<p>
+After the fix, each cached item is stored with the qname and qtype of
+the original request, and each incoming request's qname and qtype are
+checked against those, even though the hash is the same.
+</p>
+
+<p>
+One thing that comes to mind is that, in both Cure53 and ToB's findings,
+the attack scenario presumes that the attacker is serving
+poisoned replies from <em>legitimate</em> network positions, i.e. the attacker
+is not racing against the upstream server by flooding the forwarder
+with datagrams to the same source port from which the query
+was forwarded. This implies that the resolver with which the forwarder
+communicates is <em>assumed</em> as malicious: the forwarder has to explicitly
+connect to the resolver (or to another forwarder) in order to receive
+the poisoned response. However, under these assumptions, even with the
+above mitigations in place, the resolver could still return <em>matching</em>
+responses for the original qname and qtype which point to a different
+IP than the legitimate one.
+</p>
+
+<p>
+A possible explanation for this threat model may be that in CoreDNS, all
+initiated UDP requests are <em>private</em>, i.e. the socket underlying
+the request is set as <em>connected</em> and can only receive datagrams
+from the same remote address to which datagrams are sent. This is
+necessary in order to avoid accepting random inbound junk, due to the
+connection-less nature of the UDP protocol.  It turns out, this behavior
+is enforced by the Go <em>net</em> package:
+</p>
+
+<pre>
+plugin/forward/connect.go 
+
+func (p *Proxy) Connect(ctx context.Context, state request.Request, opts options) (*dns.Msg, error) {
+        start := time.Now()
+
+        proto := ""
+        switch {
+        case opts.forceTCP: // TCP flag has precedence over UDP flag
+                proto = "tcp"
+        case opts.preferUDP:
+                proto = "udp"
+        default:
+                proto = state.Proto()
+        }
+
+        pc, cached, err := p.transport.Dial(proto)
+...
+</pre>
+
+<p>
+Regardless of the transport protocol of the request, or of the protocol
+enforced by the plugin configuration, a <code>Dial</code> method is invoked:
+</p>
+
+<pre>
+func (t *Transport) Dial(proto string) (*persistConn, bool, error) {
+        ...
+        reqTime := time.Now()
+        timeout := t.dialTimeout()
+        if proto == "tcp-tls" {
+                conn, err := dns.DialTimeoutWithTLS(&quot;tcp&quot;, t.addr, t.tlsConfig, timeout)
+                t.updateDialTimeout(time.Since(reqTime))
+                return &amp;persistConn{c: conn}, false, err
+        }
+        conn, err := dns.DialTimeout(proto, t.addr, timeout)
+        t.updateDialTimeout(time.Since(reqTime))
+        return &amp;persistConn{c: conn}, false, err
+}
+
+</pre>
+
+<p>
+The effective request is carried out by the <a
+href="https://github.com/miekg/dns">dns library</a> package, which is
+not part of CoreDNS. Therein, we can find the method <code>DialTimeout</code>,
+besides its siblings, under <code>dns/client.go</code>:
+</p>
+
+<pre>
+func DialTimeout(network, address string, timeout time.Duration) (conn *Conn, err error) {
+        client := Client{Net: network, Dialer: &amp;net.Dialer{Timeout: timeout}}
+        return client.Dial(address)
+}
+...
+func (c *Client) Dial(address string) (conn *Conn, err error) {
+        return c.DialContext(context.Background(), address)
+}
+
+func (c *Client) DialContext(ctx context.Context, address string) (conn *Conn, err error) {
+        // create a new dialer with the appropriate timeout
+        var d net.Dialer
+        ...
+        conn = new(Conn)
+        if useTLS {
+            ...
+        } else {
+                conn.Conn, err = d.DialContext(ctx, network, address)
+        }
+
+</pre>
+
+<p>
+<code>DialContext</code> method of structure <code>Dialer</code> is
+found in the Go standard library under <code>net/dial.go</code>. It
+takes at least seven intermediary function calls to finally arrive at
+the function that establishes the UDP socket:
+</p>
+
+<pre>
+DialContext -&gt; dialParallel -&gt; dialSerial -&gt; dialSingle -&gt; dialUDP -&gt; internetSocket -&gt; socket -&gt; dial
+</pre>
+
+<p>
+The latter is the only relevant one, the others are just setup calls:
+</p>
+
+<pre>
+net/sock_posix.go
+
+(fd *netFD) dial(ctx context.Context, laddr, raddr sockaddr, ...)  error {
+...
+    if raddr != nil {
+        if rsa, err = raddr.sockaddr(fd.family); err != nil {
+            return err
+        }
+        if crsa, err = fd.connect(ctx, lsa, rsa); err != nil {
+            return err
+        }
+        fd.isConnected = true
+    }
+...
+
+</pre>
+
+<p>
+As it can be seen, the <code>connect</code> function is called upon the
+file descriptor of the socket, which has the effect of rendering the UDP
+socket <em>connected</em>.  Therefore, an attacker willing to poison the
+forwarder is only left with the option of blindly sending IP-spoofed
+responses to the forwarder.  This is indeed the classic scenario of
+the original DNS cache poisoning attack: the attacker is considered
+<em>off-path</em>, otherwise they must be already in a privileged
+network position as the one assumed in the findings of Cure53 and ToB.
+Attackers in a trust relationship with the forwarder (or resolver,
+in the original attack), or in-the-middle, could always reply with
+a poisoned response without the need to overcome the more demanding
+requirements of an off-path attacker, which are the guessing of the
+transaction ID and the source port of the UDP request. In a sense, the
+poisoning attacks uncovered during the Cure53 and Trail of Bits audits
+are necessarily more "privileged" than the classic Kaminsky's attack,
+where the attacker is off-path.
+</p>
+
+<p>
+This is the reason why in <a href="https://www.rfc-editor.org/rfc/rfc5452#section-4.5">RFC 5452</a> it is mandated
+that the source port of the client-side connection be randomized,
+and this was what practically fixed the former Kaminsky bug, since
+at the time the source port was commonly set to a static number.
+</p>
+
+<p>
+To recap: <code>connect()</code> on the forwader-initiated requests leaves the
+attacker with the only option of IP-spoofing the responses with which 
+she attempts to guess the source port and the transaction ID of the
+forwarder request. This amounts to $2^{32}$ attempts to be delivered to the
+forwarder in a very limited time frame, which makes the attack unfeasible
+in the absence of any flaw in the way the source ports are allocated, or
+in the generation of the transaction IDs.
+</p>
+
+<p>
+With regards to the latter, which represent the other half
+of the random pool carried by the client-side requests, <a
+href="https://github.com/coredns/coredns/issues/3547">an issue was
+found</a> in the underlying dns library which made all transaction
+IDs correlated and therefore easier to predict, given that an insecure
+non-cryptographic random generator was used for the task. The issue was
+promptly fixed, though.
+</p>
+
+<p>
+At first glance, one might be tempted to believe that the client-side
+requests initiated by the forwarder are not susceptible of carrying
+improperly set source ports. Indeed, on Linux systems, the randomization
+of source ports is taken care of by the kernel when the source port is
+not specified by the application.  The <code>DialContext</code> method
+under <code>net/dial.go</code> of Go library always leaves the local
+address, and hence the source port, unspecified by default:
+</p>
+
+<pre>
+type Dialer struct {
+...
+    // LocalAddr is the local address to use when dialing an
+    // address. The address must be of a compatible type for the
+    // network being dialed.
+    // If nil, a local address is automatically chosen.
+    LocalAddr Addr
+...
+}
+...
+func (d *Dialer) DialContext(ctx context.Context, network, address string) (Conn, error) {
+    ...
+    sd := &amp;sysDialer{
+        Dialer:  *d, 
+        network: network,
+        address: address,
+    }
+    ...
+    return sd.dialParallel(ctx, primaries, fallbacks)
+}
+</pre>
+
+<p>
+<code>Dialer</code> is type-embedded into <code>sysDialer</code> but
+no value for <code>LocalAddr</code>, nor any other field, is specified,
+leaving it to its initialization value <code>nil</code>. This means that
+whenever the forwarder initiates a UDP connection, the source port is
+effectively random.
+</p>
+
+<p>
+However, CoreDNS forward plugin implements a persistent connection
+cache, which makes the forwarder re-utilize connections that were already
+allocated during a pre-defined time frame (default is 10 seconds).
+
+The connection cache logic can be found under
+<code>plugin/forward/persistent.go</code>:
+</p>
+
+<pre>
+func (t *Transport) connManager() {
+        ticker := time.NewTicker(defaultExpire)
+        defer ticker.Stop()
+Wait:
+        for {
+                select {
+                case proto := &lt;-t.dial:
+                        transtype := stringToTransportType(proto)
+                        // take the last used conn - complexity O(1)
+                        if stack := t.conns[transtype]; len(stack) > 0 {
+                                pc := stack[len(stack)-1]
+                                if time.Since(pc.used) &lt; t.expire {
+                                        // Found one, remove from pool and return this conn.
+                                        t.conns[transtype] = stack[:len(stack)-1]
+                                        t.ret &lt;- pc
+                                        continue Wait
+                                }
+                                // clear entire cache if the last conn is expired
+                                t.conns[transtype] = nil
+                                // now, the connections being passed to closeConns() are not reachable from
+                                // transport methods anymore. So, it's safe to close them in a separate goroutine
+                                go closeConns(stack)
+                        }
+                        t.ret &lt;- nil
+
+                case pc := &lt;-t.yield:
+                        transtype := t.transportTypeFromConn(pc)
+                        t.conns[transtype] = append(t.conns[transtype], pc)
+...
+
+</pre>
+
+<p>
+The channel <code>dial</code> of struct <code>Transport</code> is used to
+receive a string message indicating the protocol of the new connection
+that the forwarder wants to initiate; each protocol defines a bucket,
+and each bucket holds the currently active connections in an array;
+connections are always returned in a last-in-first-out scheme. Once the
+caller is done with a connection, it releases it by putting it in the
+<code>yield</code> channel of the transport.
+</p>
+
+<p>
+The forwarder refers to the upstream resolvers as
+"proxies"; connections to the proxies are initiated with the
+<code>Connect</code> method of structure <code>Proxy</code>, under
+<code>plugin/forward/connect.go</code>, where we can have a better view
+of the connections' lifecycle:
+</p>
+
+<pre>
+func (p *Proxy) Connect(ctx context.Context, state request.Request, opts options) (*dns.Msg, error) {
+        ...
+①       pc, cached, err := p.transport.Dial(proto)
+        if err != nil {
+                return nil, err
+        }
+        ...
+
+        if err := pc.c.WriteMsg(state.Req); err != nil {
+                pc.c.Close() // not giving it back
+                if err == io.EOF &amp;&amp; cached {
+                        return nil, ErrCachedClosed
+                }
+                return nil, err
+        }
+
+        var ret *dns.Msg
+        pc.c.SetReadDeadline(time.Now().Add(readTimeout))
+        for {
+                ret, err = pc.c.ReadMsg()
+                if err != nil {
+                    ...
+                }
+                // drop out-of-order responses
+                if state.Req.Id == ret.Id {
+                        break
+                }
+
+ 
+        }
+
+②       p.transport.Yield(pc)
+    ...
+</pre>
+
+<p>
+Line ① is where the interaction with the cache happens: method
+<code>Dial</code> of <code>Transport</code> puts a message on the
+<code>dial</code> channel requesting any available cached connection for
+the protocol <code>proto</code>; any value from channel <code>ret</code>
+is then waited upon: </p>
+
+<pre>
+func (t *Transport) Dial(proto string) (*persistConn, bool, error) {
+        // If tls has been configured; use it.
+        if t.tlsConfig != nil {
+                proto = "tcp-tls"
+        }
+
+        t.dial &lt;- proto
+        pc := &lt;-t.ret
+        if pc != nil {
+    ...
+
+</pre>
+
+<p>
+After writing the DNS request to the socket, the response is read and
+finally the connection can be inserted in the cache again by means of
+the `Yield` method invoked on line ②; the method will just put the
+<code>pc</code> connection object in the <code>yield</code> channel
+described above.
+</p>
+
+<p>
+This mechanism implies that on a very busy forwarder, i.e. where
+connections to the upstream proxy happens regurarly fast enough to
+refresh the connection expiration time, the likelihood of reusing always
+the same connection is very high.
+</p>
+
+<p>
+This behavior could, of course, be coerced: one can think of a web
+page triggering a XHR request every five seconds in the background when
+visited by a peer served by the forwarder (as in the original Kaminsky
+paper); more generally, an unprivileged, cooperating host (or container)
+whose resolution requests are served by the forwarder, can make the
+cached connection <em>permanent</em> by performing a lookup every $n &lt; 10$
+seconds. This can be easily verified by mounting a forwarder instance
+with a simple configuration like:
+</p>
+
+<pre>
+### Corefile.forwarder
+.:8853 {
+    forward . 10.191.237.6:8853
+    log
+    errors
+}
+</pre>
+
+<p>The upstream resolver is configured with the following:</p>
+
+<pre>
+### Corefile.resolver
+.:8853 {
+    file doom.db
+    log
+    errors
+}
+
+### doom.db
+doom.com.        IN  SOA dns.doom.com. gco.doom.com. 2015082541 7200 3600 1209600 3600
+
+dns.doom.com    IN  A   10.71.161.139
+things-viral.doom.com   IN  A   1.2.3.4
+</pre>
+
+<p>The forwarder has IP <code>10.191.237.174</code> and will be used to send queries through:</p>
+
+<code>while true; do dig @10.191.237.174 -p 8853 things-viral.doom.com; sleep 5; done</code>
+
+<p>
+For convenience, we print a debug message from within the <code>Dial</code> function (or attach
+gdb to a running instance of the forwarder):
+</p>
+
+<pre>
+        if pc != nil {
+                ConnCacheHitsCount.WithLabelValues(t.addr, proto).Add(1)
+                fmt.Printf(&quot;Cached connection: LocalAddress: %v, RemoteAddress: %v ###&quot;, pc.c.LocalAddr().String(), pc.c.RemoteAddr().String())
+                return pc, true, nil
+        }
+
+</pre>
+
+<p> This way, we have the source port easily logged:</p>
+
+<pre>
+[INFO] 10.191.237.1:57004 - 22032 "A IN things-viral.doom.com. udp 62 false 1232" NOERROR qr,aa,rd 99 0.002193317s
+Cached connection: LocalAddress: 10.191.237.174:38355, RemoteAddress: 10.191.237.6:8853 ###[INFO] 10.191.237.1:49263 - 19067 "A IN things-viral.doom.com. udp 62 false 1232" NOERROR qr,aa,rd 99 0.000724985s
+Cached connection: LocalAddress: 10.191.237.174:38355, RemoteAddress: 10.191.237.6:8853 ###[INFO] 10.191.237.1:50915 - 18066 "A IN things-viral.doom.com. udp 62 false 1232" NOERROR qr,aa,rd 99 0.000728109s
+Cached connection: LocalAddress: 10.191.237.174:38355, RemoteAddress: 10.191.237.6:8853 ###[INFO] 10.191.237.1:34574 - 47229 "A IN things-viral.doom.com. udp 62 false 1232" NOERROR qr,aa,rd 99 0.001512207s
+Cached connection: LocalAddress: 10.191.237.174:38355, RemoteAddress: 10.191.237.6:8853 ###[INFO] 10.191.237.1:54639 - 39535 "A IN things-viral.doom.com. udp 62 false 1232" NOERROR qr,aa,rd 99 0.000718289s
+Cached connection: LocalAddress: 10.191.237.174:38355, RemoteAddress: 10.191.237.6:8853 ###[INFO] 10.191.237.1:51254 - 29698 "A IN things-viral.doom.com. udp 62 false 1232" NOERROR qr,aa,rd 99 0.001259638s
+...
+</pre>
+
+<p>As it can be seen, the source port of the UDP connection can be made <em>static</em>.</p>
+
+<p>According to <a href="https://www.rfc-editor.org/rfc/rfc5452#section-4.5">RFC 5452, section 4.5:</a></p>
+
+<blockquote>
+   If the source port of the original query is random, but static, any
+   authoritative nameserver under observation by the attacker can be
+   used to determine this port.  This means that matching this
+   conditions often requires no guess work.
+</blockquote>
+
+<p>
+The RFC refers to the situation where the resolver initiates the
+connection, and since the resolver connects eventually to the nameserver
+(which in this case can be controlled by the attacker), a static source
+port is eventually leaked. In our scenario, the target of the poisoning is
+the forwarder, and the forwarder will not ever connect to any upstream
+server the attacker controls, unless one operates under the same relaxed
+assumptions of Cure53 and Trail of Bits' attacks.
+This means that the attacker still has to perform some guesswork
+in order to infer the single <em>static</em> port from the ephemeral range
+(32768-60999 on Linux).
+</p>
+
+<p>
+The archetypal source port de-randomization attacks introduced by <a
+href="https://arxiv.org/pdf/1205.5190.pdf">Herzberg and Shulman</a> and <a
+href="http://www.cs.ucr.edu/~zhiyunq/pub/infocom19_client_dns.pdf">Alharbi
+et al.</a> both propose a threat model where the off-path attacker
+coordinates with a cooperating program on the same host that initiates
+the client-side requests. In both papers, the program is unprivileged and
+only exploits the permissive port allocation policy of the underlying
+operating system.  Indeed, despite ulimit's apparent restriction to
+the number of simultaneously open sockets, the OS usually does not prevent
+a program to fork repeatedly and to reserve as many ports as needed,
+up to the extent that the exhaustion of the available port range is possible.
+The result is that the pool of source ports available for each forwarded 
+DNS query becomes small and predictable.
+</p>
+
+<p>
+Interestingly, this exact strategy could be devised in shared
+environments, in which CoreDNS is usually deployed: given that the
+forwarder's source port never changes, an unprivileged, co-located
+container on the same node of the forwarder could exploit the way the
+container ports are NAT'ed to the host.  Without loss of generality,
+for example, a container instance of an image defined with a Dockerfile
+of the form:
+</p>
+
+<pre>
+FROM alpine
+EXPOSE 32000-40000/udp
+ENTRYPOINT /bin/sh
+</pre>
+
+<p>
+when run with the <code>-P</code> option, will make the runtime engine
+map all of the specified ports to host's ports sourced from the host's
+ephemeral port range. The host source ports do not seem to be picked
+in a random way: indeed, only the first port will be randomly picked,
+whereas all the others are progressively decremented from the latter:
+</p>
+
+<pre>
+$ docker port $(docker ps -q) | sort -n -t'/' -k1
+32000/udp -&gt; 0.0.0.0:48970
+32001/udp -&gt; 0.0.0.0:48969
+32002/udp -&gt; 0.0.0.0:48968
+32003/udp -&gt; 0.0.0.0:48967
+32004/udp -&gt; 0.0.0.0:48966
+32005/udp -&gt; 0.0.0.0:48965
+32006/udp -&gt; 0.0.0.0:48964
+32007/udp -&gt; 0.0.0.0:48963
+32008/udp -&gt; 0.0.0.0:48962
+32009/udp -&gt; 0.0.0.0:48961
+32010/udp -&gt; 0.0.0.0:48960
+32011/udp -&gt; 0.0.0.0:48959
+...
+39997/udp -&gt; 0.0.0.0:40973
+39998/udp -&gt; 0.0.0.0:40972
+39999/udp -&gt; 0.0.0.0:40971
+40000/udp -&gt; 0.0.0.0:40970
+</pre>
+
+<p>
+This behavior mimics that of prominent NAT devices (including Iptables
+NAT), and could be used as a modern source port de-randomization
+primitive, which helps the attacker to restrict the available ephemeral
+ports to smaller ranges, whereas the <em>static</em>, persistent
+connections of the CoreDNS forwarder may extend the time window for a
+cache-poisoning attack indefinitely.
+</p>
+
+<p>
+It is important to mention that the de-randomization scenario above is only
+one example where an unprivileged attacker could reduce their guessing
+efforts. The crux of the matter is that the persistent connection gives
+the attacker a reasonably long time window during which they could
+send multiple forged responses with several different transaction IDs,
+and only those, once the source port is unveiled. There is indeed a
+huge difference between a random source port allocated for each new
+connection and which lasts only a few seconds, and a single static port
+that, although selected randomly, hardly ever changes.
+</p>
+
+<p>
+To recap:
+</p>
+<ul>
+<li> An off-path attacker willing to poison the cache of the forwarder
+  could not normally infer the source port of request UDP connections
+  initiated by the forwarder. </li>
+
+<li> Given that the forwarder connections can be made static by lookups
+  made at regular intervals, not only does the guessing work not need to
+  be repeated but also gives the attacker the opportunity to indefinitely
+  try to inject spoofed responses. This effectively reduces the effort
+  from $2^{32}$ attempts, in a limited time frame of only a few seconds, to
+  $2^{16}$ for guessing the transaction IDs in a potentially unlimited time
+  frame, once the source port is discovered by other means. </li>
+
+<li> If the same off-path attacker manages to obtain co-location on
+  the same node of the forwarder, they could influence the source port
+  allocation in order to reduce the guessing work; this is necessary
+  because, contrary to the resolver of RFC5452#section-4.5, the forwarder
+  does not usually connect to a  "server under observation by the
+  attacker" (as assumed in Cure53 and Trail of Bits audits). </li>
+</ul>
+
+<p>
+A possible mitigation strategy which would not radically affect the connection
+caching mechanism could be to simply try to detect Id enumeration
+attempts: after a certain amount of different message Ids for the
+same response are collected, the connection is either destroyed or
+the forwarder switches to TCP. <a href="https://blog.cloudflare.com/sad-dns-explained/">It seems that Cloudflare</a> uses this to
+mitigate injected spoofed replies to their resolvers, despite their
+<a href="https://blog.cloudflare.com/how-to-stop-running-out-of-ephemeral-ports-and-start-to-love-long-lived-connections/">predisposition to long-lived connections</a>.</p>
+
+<p>
+Presently, CoreDNS forwarder only verifies that the transaction Id
+of the reply matches that of the former request:</p>
+
+<pre> plugin/forward/connect.go
+...
+        for {
+                ret, err = pc.c.ReadMsg()
+                if err != nil {
+                    ...
+                }
+                // drop out-of-order responses
+                if state.Req.Id == ret.Id {
+                        break
+                }
+        }
+
+</pre>
+
+<p>
+Whichever reply carrying the right Id comes first, it might eventually
+succeed in poisoning the forwarder cache.
+</p>

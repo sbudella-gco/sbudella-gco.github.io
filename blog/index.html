@@ -6,14 +6,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" type="text/css" href="../style.css">
   <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
-  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es6/tex-mml-chtml.js"></script>
   <script>
-      window.MathJax = {
-      tex: {
-        inlineMath: [['$', '$'], ['\\(', '\\)']]
-      }
-    };
-  </script>  
+  MathJax = {
+    tex: {
+      inlineMath: {'[+]': [['$', '$']]}
+    }
+  };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
 </head>
 
 <body>
@@ -447,16 +447,13 @@ one of my weekends. When the machine oppresses, break the machine.
     </h2>
 
     <p>
-    In order to run the <a href="https://www.gnu.org/software/apl/">GNU APL</a>
-    interpreter on OpenBSD, that to the best of my knowledge seems to be
+    I ported the <a href="https://www.gnu.org/software/apl/">GNU APL</a>
+    interpreter to OpenBSD. To the best of my knowledge it seems to be
     one of the very few free
     <a href="https://sites.google.com/site/baavector/interpreters">APL interpreters</a>
-    available, I created a port that I currently mantain and that will be part
-    of the next OpenBSD release (by the time of this writing is planned to be
-    the 6.2). I also packaged 
+    available. I also packaged
     <a href="http://www.apl385.com/fonts/index.htm">Adrian Smith's original
     fonts</a>, which are now a dependency of the GNU APL package.
-    For the time being I host both ports on my home page as well.
     </p>
   </article>
   <a href="20170821-apl-openbsd.html">Read more</a>

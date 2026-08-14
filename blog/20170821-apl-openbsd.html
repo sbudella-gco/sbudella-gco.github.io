@@ -6,7 +6,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" type="text/css" href="../style.css">
-  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella.altervista.org/feed.xml" />
+  <link rel="alternate" type="application/rss+xml" title="RSS Feed" href="https://www.sbudella-gco.github.io/blog/feed.xml" />
 </head>
 
 <body>
@@ -28,11 +28,11 @@
     </h2>
 
     <p>
-    I ported the <a href="https://www.gnu.org/software/apl/">GNU APL</a>
+    I <a href="https://marc.info/?l=openbsd-ports-cvs&m=150517345621654&w=2">ported</a> the <a href="https://www.gnu.org/software/apl/">GNU APL</a>
     interpreter to OpenBSD. To the best of my knowledge it seems to be
     one of the very few free
     <a href="https://sites.google.com/site/baavector/interpreters">APL interpreters</a>
-    available. I also packaged
+    available. I also <a href="https://marc.info/?l=openbsd-ports-cvs&m=150517327621616&w=2">packaged</a>
     <a href="http://www.apl385.com/fonts/index.htm">Adrian Smith's original
     fonts</a>, which are now a dependency of the GNU APL package.
     </p>
@@ -44,21 +44,9 @@
   steps in one place.
   </p>
 
-    <p>
-    We install the two ports first (note that the download is not necessary
-    on -current or from 6.2 on):
-    </p>
-
-    <pre>
-    cd /usr/ports/
-    ftp -o - http://sbudella.altervista.org/stuff/apl-fonts.tgz | tar -C fonts/ -xzvf -
-    ftp -o - http://sbudella.altervista.org/stuff/apl.tgz | tar -C lang/ -xzvf -
-    cd lang/apl && make install
-    </pre>
-
   <p>
-  The first thing we need to enable after we installed the two packages is
-  the UTF-8 character encoding in the locale; I added the following lines to
+  After installing the interpreter with <code>pkg_add apl</code> (which automatically installs the fonts),
+  we need to enable the UTF-8 character encoding in the locale; I added the following lines to
   my <em>.profile</em> file:
   </p>
 
@@ -68,7 +56,7 @@
   </pre>
 
   <p>
-  We need to do the same for X, and at the same time specify which font
+  We need to do the same for X, and at the same time we must specify which font
   set we want to use; I have the following lines in my <em>.Xdefaults</em>,
   the latter of which is one of the two fonts that the apl-fonts
   package installed in <em>/usr/local/share/fonts/apl</em>:
@@ -81,7 +69,7 @@
 
   <p>
   The above steps are enough to ensure that the system displays APL symbols
-  correctly. In order to verify it, the file
+  correctly. To verify that everything works correctly, the file
   <em>/etc/gnu-apl.d/keyboard1.txt</em> must show something like this:
   </p>
 
@@ -90,7 +78,7 @@
   <p>
   The picture shown provides us with a good starting point
   for the keyboard layout; as better explained in the documentation, there are
-  many a way to configure the keyboard to use the APL symbols, either system
+  many ways to configure the keyboard for APL symbols, either system
   wide or circumscribed to the APL interpreter only. My personal preference
   is to dedicate ten minutes to writing a custom <em>.XCompose</em> that
   would spatially map the APL symbols exactly as shown in the picture to
@@ -104,7 +92,7 @@
   There are better news for the lazy: someone else already compiled the
   <a href="https://lists.gnu.org/archive/html/bug-apl/2014-05/msg00004.html">.XCompose</a>
   for you. So what is left is to define the compose key in <em>.xinitrc</em>,
-  in my case it's the right control key in order not to clash with tmux and cwm:
+  in my case it's the right control key, to avoid clashing with tmux and cwm control keys:
   </p>
 
   <pre>
